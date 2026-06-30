@@ -12,6 +12,10 @@ esm/
 # (sqlalchemy_uri / password / encrypted_extra) — НЕ коммитить.
 superset-meta-backup-*.sql
 
+# --- Python кэши ---
+__pycache__/
+*.pyc
+
 # --- OS / редакторы ---
 .DS_Store
 .idea/
