@@ -11,6 +11,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 PLUGINS=(
   "superset-plugin-chart-partner-registrations"
   "superset-plugin-chart-split-funnel"
+  "superset-plugin-chart-session-autopsy"
 )
 FRONTEND_DIR="$REPO_ROOT/superset/superset-frontend"
 
