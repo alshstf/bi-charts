@@ -1,0 +1,14 @@
+{
+  "token": {
+    "colorPrimary": "#C02BDF",
+    "colorInfo": "#7A5CF0",
+    "colorSuccess": "#56A865",
+    "colorWarning": "#F0A13B",
+    "colorError": "#E2557B",
+    "colorLink": "#D24BE0",
+    "borderRadius": 8,
+    "fontFamily": "'Inter', 'Helvetica Neue', Arial, sans-serif",
+    "brandLogoAlt": "GigaID Analytics"
+  },
+  "algorithm": "default"
+}

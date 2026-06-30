@@ -1,0 +1,19 @@
+# --- Зависимости и артефакты сборки плагинов (пересоздаются npm/скриптами) ---
+node_modules/
+lib/
+esm/
+*.log
+*.tsbuildinfo
+
+# --- Клон Apache Superset (4.5 ГБ, пересоздаётся ./setup-superset-dev.sh) ---
+/superset/
+
+# --- Локальный бэкап метаданных Superset: содержит боевые креды БД ---
+# (sqlalchemy_uri / password / encrypted_extra) — НЕ коммитить.
+superset-meta-backup-*.sql
+
+# --- OS / редакторы ---
+.DS_Store
+.idea/
+.vscode/
+*.swp
