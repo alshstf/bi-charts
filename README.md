@@ -8,12 +8,16 @@
 bi-charts/
 ├── plugins/                                  # исходники чартов (по одному на папку)
 │   ├── superset-plugin-chart-split-funnel/       # основной: Split Funnel
+│   ├── superset-plugin-chart-session-autopsy/    # Session Autopsy — разбор одной сессии
 │   └── superset-plugin-chart-partner-registrations/  # POC: Partner Registrations Timeseries
 ├── scripts/                                  # тулинг
 │   ├── setup-superset-dev.sh                     # бутстрап окружения с нуля
 │   ├── rebuild-plugin.sh                         # быстрый цикл пересборки
 │   ├── seed-funnel-data.sh                       # синтетика воронки в Postgres
-│   └── seed-demo-data.sh                         # синтетика таймсерий
+│   ├── seed-demo-data.sh                         # синтетика таймсерий
+│   ├── seed-session-events.sh                    # синтетика событий сессий (для Session Autopsy)
+│   ├── export-dashboards.sh                      # чистый экспорт дашборда (без паролей)
+│   └── host-agent.sh                             # мост: выполнять project-скрипты по запросу из песочницы
 ├── themes/                                   # темы Superset (Settings → Themes)
 │   ├── gigaid-theme.json
 │   └── gigaid-theme-dark.json
@@ -25,11 +29,14 @@ bi-charts/
 ## Что внутри
 
 - **`plugins/superset-plugin-chart-split-funnel`** — основной плагин **Split Funnel**: воронка с точкой ветвления (общий ствол → параллельные мини-воронки по веткам, напр. sms / email / sber_id). Слияние общего финального шага в сегментированный итог, сворачивание веток, легенда с пересчётом (what-if), три базиса процентов, выравнивание баров, **small multiples** (сетка по партнёрам) с компактным свёрнутым видом, подсветка худшего drop-off, Drill to Detail. Бренд-палитра + светлая/тёмная темы.
+- **`plugins/superset-plugin-chart-session-autopsy`** — плагин **Session Autopsy**: разбор одной пользовательской сессии «под лупой». Вердикт-шапка с диагностикой (итог, корень, возвраты/повторы/ветки), swimlane по веткам (горизонт/вертикаль) и node-граф пути, in-place детали ошибки, тултипы, клик по шагу → raw-строка события. Колонки маппятся в контрол-панели (поедет и на боевом ClickHouse). Точки входа на дашборде: фильтр `session_id`, «Лента сбоев» (виртуальный датасет), кросс-фильтр клик→сессия.
 - **`plugins/superset-plugin-chart-partner-registrations`** — POC-плагин **Partner Registrations Timeseries**.
 - **`scripts/`** — тулинг:
-  - `setup-superset-dev.sh` — бутстрап с нуля: клонирует apache/superset нужного тега, собирает оба плагина, регистрирует их в `MainPreset`, патчит webpack, добавляет драйвер ClickHouse, поднимает контейнеры.
-  - `rebuild-plugin.sh` — пересобрать оба плагина и перезапустить dev-сервер после правок кода.
-  - `seed-funnel-data.sh`, `seed-demo-data.sh` — синтетические данные в Postgres compose-стека.
+  - `setup-superset-dev.sh` — бутстрап с нуля: клонирует apache/superset нужного тега, собирает плагины, регистрирует их в `MainPreset`, патчит webpack, добавляет драйвер ClickHouse, поднимает контейнеры.
+  - `rebuild-plugin.sh` — пересобрать плагины и перезапустить dev-сервер после правок кода.
+  - `seed-funnel-data.sh`, `seed-demo-data.sh`, `seed-session-events.sh` — синтетические данные в Postgres compose-стека.
+  - `export-dashboards.sh` — чистый экспорт дашборда (YAML в ZIP, пароли маскируются).
+  - `host-agent.sh` — мост между песочницей Claude и Docker на хосте: выполняет project-скрипты из белого списка по запросу (через `.host-queue/`).
 - **`themes/`** — `gigaid-theme.json`, `gigaid-theme-dark.json` (импорт в Settings → Themes, Superset 6.x).
 
 ## Требования
