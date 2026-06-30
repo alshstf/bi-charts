@@ -68,7 +68,20 @@ export default function transformProps(chartProps: ChartProps) {
   const kPartner = key(raw.partner_col);
   const kDevice = key(raw.device_col);
 
-  const rows = ((queriesData?.[0]?.data ?? []) as DataRecord[]).slice();
+  let rows = ((queriesData?.[0]?.data ?? []) as DataRecord[]).slice();
+
+  // чарт показывает ОДНУ сессию. Если выборка содержит несколько (фильтр по
+  // session_id не задан), берём одну: приоритет у явного контрола session_id,
+  // иначе первую встретившуюся — чтобы не смешивать события разных сессий.
+  if (kSession && rows.length) {
+    const ctrlSid =
+      (formData as Record<string, any>).sessionId ?? raw.session_id ?? null;
+    const targetSid =
+      ctrlSid != null && String(ctrlSid) !== ''
+        ? String(ctrlSid)
+        : String(rows[0][kSession]);
+    rows = rows.filter(r => String(r[kSession]) === targetSid);
+  }
 
   // --- первичный проход: сырьё -> события ---
   type Pre = Omit<SessionEvent, 'idx' | 'gapMs' | 'isBack' | 'isRetry'>;

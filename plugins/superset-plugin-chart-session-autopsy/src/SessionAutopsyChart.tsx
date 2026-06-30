@@ -394,7 +394,7 @@ export default function SessionAutopsyChart(props: SessionAutopsyChartProps) {
           {selected ? (
             <RawPanel e={selected} c={c} onClose={() => setSelected(null)} />
           ) : (
-            <div style={{ fontSize: 11, color: c.textMuted, marginTop: 8 }}>Клик по шагу — сырьё события</div>
+            <div style={{ fontSize: 11, color: c.textMuted, marginTop: 8 }}>Клик по шагу — raw-данные события</div>
           )}
         </>
       )}
