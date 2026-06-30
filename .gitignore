@@ -12,6 +12,9 @@ esm/
 # (sqlalchemy_uri / password / encrypted_extra) — НЕ коммитить.
 superset-meta-backup-*.sql
 
+# --- Очередь хост-агента (локальный мост, не версионируем) ---
+.host-queue/
+
 # --- Python кэши ---
 __pycache__/
 *.pyc
