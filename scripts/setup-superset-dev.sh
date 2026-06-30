@@ -12,15 +12,16 @@ set -euo pipefail
 
 SUPERSET_TAG="6.1.0"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 # имя-папки:ИмяКласса:viz_key
 PLUGINS=(
   "superset-plugin-chart-partner-registrations:PartnerRegistrationsChartPlugin:partner_registrations_timeseries"
   "superset-plugin-chart-split-funnel:SplitFunnelChartPlugin:split_funnel"
 )
-SUPERSET_DIR="$SCRIPT_DIR/superset"
+SUPERSET_DIR="$REPO_ROOT/superset"
 FRONTEND_DIR="$SUPERSET_DIR/superset-frontend"
 PLUGIN_NAME="superset-plugin-chart-partner-registrations"
-PLUGIN_DIR="$SCRIPT_DIR/$PLUGIN_NAME"
+PLUGIN_DIR="$REPO_ROOT/plugins/$PLUGIN_NAME"
 
 log()  { printf '\n\033[1;36m==> %s\033[0m\n' "$*"; }
 fail() { printf '\033[1;31mERROR: %s\033[0m\n' "$*" >&2; exit 1; }
@@ -54,7 +55,7 @@ fi
 # --- 2-3. Собираем каждый плагин в node:22 и копируем в workspace -------------
 for entry in "${PLUGINS[@]}"; do
   name="${entry%%:*}"
-  dir="$SCRIPT_DIR/$name"
+  dir="$REPO_ROOT/plugins/$name"
   dest="$FRONTEND_DIR/plugins/$name"
   [ -d "$dir" ] || fail "не найдена папка плагина: $dir"
   log "Собираю $name в контейнере node:22"
@@ -205,6 +206,6 @@ cat <<TXT
   3. Темы UI:                        Settings -> Themes (Superset 6.x)
   4. Чарт плагина: "Partner Registrations Timeseries" (категория Evolution)
 
-  Пересборка плагина после правок кода:  ./rebuild-plugin.sh
+  Пересборка плагина после правок кода:  ./scripts/rebuild-plugin.sh
   Остановить всё:                        cd superset && docker compose down
 TXT

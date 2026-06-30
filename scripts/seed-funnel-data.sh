@@ -7,7 +7,8 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-dc() { docker compose --project-directory "$SCRIPT_DIR/superset" "$@"; }
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+dc() { docker compose --project-directory "$REPO_ROOT/superset" "$@"; }
 
 dc ps --services --status running | grep -q '^db$' \
   || { echo "Сервис db не запущен — сначала ./setup-superset-dev.sh"; exit 1; }

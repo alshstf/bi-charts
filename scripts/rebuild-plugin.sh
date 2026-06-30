@@ -7,14 +7,15 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 PLUGINS=(
   "superset-plugin-chart-partner-registrations"
   "superset-plugin-chart-split-funnel"
 )
-FRONTEND_DIR="$SCRIPT_DIR/superset/superset-frontend"
+FRONTEND_DIR="$REPO_ROOT/superset/superset-frontend"
 
 for name in "${PLUGINS[@]}"; do
-  dir="$SCRIPT_DIR/$name"
+  dir="$REPO_ROOT/plugins/$name"
   dest="$FRONTEND_DIR/plugins/$name"
   [ -d "$dest" ] || { echo "$name: нет в workspace — сначала ./setup-superset-dev.sh"; exit 1; }
   echo "==> $name: babel build в node:22"
@@ -30,5 +31,5 @@ for name in "${PLUGINS[@]}"; do
 done
 
 echo "==> Перезапускаю dev-server (компиляция ~2-3 мин, следить: docker logs -f superset_node)"
-docker compose --project-directory "$SCRIPT_DIR/superset" restart superset-node
+docker compose --project-directory "$REPO_ROOT/superset" restart superset-node
 echo "==> Готово."
