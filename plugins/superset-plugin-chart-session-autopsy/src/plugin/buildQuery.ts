@@ -1,8 +1,4 @@
-import {
-  buildQueryContext,
-  ensureIsArray,
-  QueryFormData,
-} from '@superset-ui/core';
+import { buildQueryContext, QueryFormData } from '@superset-ui/core';
 
 /**
  * Тянем сырые строки событий ОДНОЙ сессии (длинный формат, по строке на
@@ -12,32 +8,37 @@ import {
  */
 export default function buildQuery(formData: QueryFormData) {
   const f = formData as Record<string, any>;
+  // DnD-контролы Superset хранят значение массивом (["col"]) — берём первый
+  const one = (v: any) => (Array.isArray(v) ? v[0] : v);
   const cols = [
-    ...ensureIsArray(f.session_id_col),
-    ...ensureIsArray(f.event_time_col),
-    ...ensureIsArray(f.step_col),
-    ...ensureIsArray(f.branch_col),
-    ...ensureIsArray(f.status_col),
-    ...ensureIsArray(f.error_code_col),
-    ...ensureIsArray(f.error_msg_col),
-    ...ensureIsArray(f.latency_col),
-    ...ensureIsArray(f.screen_col),
-    ...ensureIsArray(f.user_col),
-    ...ensureIsArray(f.partner_col),
-    ...ensureIsArray(f.device_col),
+    one(f.session_id_col),
+    one(f.event_time_col),
+    one(f.step_col),
+    one(f.branch_col),
+    one(f.status_col),
+    one(f.error_code_col),
+    one(f.error_msg_col),
+    one(f.latency_col),
+    one(f.screen_col),
+    one(f.user_col),
+    one(f.partner_col),
+    one(f.device_col),
   ].filter(Boolean);
+
+  const sidCol = one(f.session_id_col);
+  const timeCol = one(f.event_time_col);
 
   return buildQueryContext(formData, baseQueryObject => {
     const filters = [...(baseQueryObject.filters || [])];
-    if (f.session_id && f.session_id_col) {
-      filters.push({ col: f.session_id_col, op: '==', val: f.session_id });
+    if (f.session_id && sidCol) {
+      filters.push({ col: sidCol, op: '==', val: f.session_id });
     }
     return [
       {
         ...baseQueryObject,
         columns: cols,
         filters,
-        orderby: f.event_time_col ? [[f.event_time_col, true]] : [],
+        orderby: timeCol ? [[timeCol, true]] : [],
         is_timeseries: false,
       },
     ];

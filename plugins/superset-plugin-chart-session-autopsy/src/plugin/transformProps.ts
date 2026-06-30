@@ -49,7 +49,12 @@ export default function transformProps(chartProps: ChartProps) {
     sliceId,
   } = formData as Record<string, any>;
 
-  const key = (c: any) => (c ? getColumnLabel(c) : null);
+  // DnD-контролы хранят значение массивом (["col"]) — берём первый элемент
+  const one = (v: any) => (Array.isArray(v) ? v[0] : v);
+  const key = (c: any) => {
+    const v = one(c);
+    return v ? getColumnLabel(v) : null;
+  };
   const kSession = key(raw.session_id_col);
   const kTime = key(raw.event_time_col);
   const kStep = key(raw.step_col) ?? 'step';
