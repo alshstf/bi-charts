@@ -66,6 +66,16 @@ cd bi-charts
 2. Добавить строку в массив `PLUGINS` в `scripts/setup-superset-dev.sh` и `scripts/rebuild-plugin.sh` (формат `имя-папки:ИмяКласса:viz_key`).
 3. `./scripts/setup-superset-dev.sh` зарегистрирует его в `MainPreset` и соберёт.
 
+## Перенос дашборда
+
+Дашборд «GigaID · Регистрации» переносится между стендами чистым экспортом Superset (YAML в ZIP; пароли БД маскируются, поэтому ZIP безопасно коммитить).
+
+```bash
+./scripts/export-dashboards.sh        # выгрузит exports/gigaid_dashboards.zip + проверит на пароли
+```
+
+Импорт на другом стенде — команды печатает сам скрипт в конце (через `superset import-dashboards`). На импорте пароли БД нужно будет ввести заново (они в экспорт не попадают).
+
 ## Что НЕ в репозитории
 
 - `superset/` — клон apache/superset (~4.5 ГБ), пересоздаётся `setup-superset-dev.sh`.
