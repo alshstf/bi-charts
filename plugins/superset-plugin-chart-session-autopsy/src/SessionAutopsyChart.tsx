@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { CSSProperties, useEffect, useState } from 'react';
 import {
   AutopsyColors,
   AutopsyOrientation,
@@ -126,7 +126,7 @@ function Toggle({
   setOrientation: (o: AutopsyOrientation) => void;
   c: AutopsyColors;
 }) {
-  const btn = (active: boolean): React.CSSProperties => ({
+  const btn = (active: boolean): CSSProperties => ({
     border: `0.5px solid ${c.border}`,
     background: active ? c.textPrimary : 'transparent',
     color: active ? c.bg : c.textMuted,
