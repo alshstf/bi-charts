@@ -1,4 +1,4 @@
-import { CSSProperties, useEffect, useState } from 'react';
+import { CSSProperties, MouseEvent as ReactMouseEvent, useEffect, useState } from 'react';
 import {
   AutopsyColors,
   AutopsyOrientation,
@@ -8,7 +8,7 @@ import {
 } from './types';
 
 const trunc = (s: string, n: number) =>
-  s && s.length > n ? `${s.slice(0, n - 1)}…` : s;
+  s && s.length > n ? `${s.slice(0, Math.max(n - 1, 1))}…` : s;
 
 function statusFill(e: SessionEvent, c: AutopsyColors): string {
   if (e.status === 'error') return c.error;
@@ -25,49 +25,93 @@ function fmtDur(ms: number): string {
   return `${m}м ${s % 60}с`;
 }
 
+function tip(e: SessionEvent): string {
+  const bits = [`${e.idx}. ${e.step}`];
+  if (e.timeLabel) bits.push(e.timeLabel);
+  if (e.branch !== 'trunk') bits.push(e.branch);
+  if (e.screen) bits.push(e.screen);
+  if (Number.isFinite(e.latencyMs)) bits.push(`${Math.round(e.latencyMs as number)} мс`);
+  if (e.gapMs > 3000) bits.push(`пауза ${fmtDur(e.gapMs)}`);
+  if (e.isBack) bits.push('← назад');
+  if (e.isRetry) bits.push('↻ повтор');
+  if (e.errorCode || e.errorMsg)
+    bits.push(`${e.errorCode || 'ошибка'}${e.errorMsg ? `: ${e.errorMsg}` : ''}`);
+  return bits.join(' · ');
+}
+
+/** drill-to-detail по правому клику: фильтры session + step + branch */
+function makeDrill(props: SessionAutopsyChartProps) {
+  return (ev: ReactMouseEvent, e: { step: string; branch: string }) => {
+    if (!props.onContextMenu) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    const f: Record<string, unknown>[] = [];
+    if (props.columns.session) {
+      f.push({ col: props.columns.session, op: '==', val: props.meta.sessionId, formattedVal: props.meta.sessionId });
+    }
+    if (props.columns.step && e.step) {
+      f.push({ col: props.columns.step, op: '==', val: e.step, formattedVal: e.step });
+    }
+    if (props.columns.branch && e.branch && e.branch !== 'trunk') {
+      f.push({ col: props.columns.branch, op: '==', val: e.branch, formattedVal: e.branch });
+    }
+    props.onContextMenu(ev.clientX, ev.clientY, { drillToDetail: f });
+  };
+}
+
+/** красная плашка с деталями ошибки в нижней полосе + выноска к узлу */
+function errorCallout(
+  e: SessionEvent,
+  ax: number,
+  ay: number,
+  stripY: number,
+  svgW: number,
+  c: AutopsyColors,
+) {
+  const boxW = Math.min(320, svgW - 16);
+  const boxH = e.errorMsg ? 50 : 34;
+  const bx = Math.max(8, Math.min(ax - 24, svgW - boxW - 8));
+  const lx = Math.max(bx + 14, Math.min(ax, bx + boxW - 14));
+  const maxChars = Math.floor((boxW - 20) / 6.4);
+  return (
+    <g key="err-callout">
+      <path d={`M${ax} ${ay + 12} L${lx} ${stripY}`} stroke={c.error} strokeWidth={1} strokeDasharray="3 2" fill="none" />
+      <rect x={bx} y={stripY} width={boxW} height={boxH} rx={8} fill={c.bgDanger} stroke={c.error} strokeWidth={0.75} />
+      <text x={bx + 10} y={stripY + 16} fontSize={12} fontWeight={500} fill={c.error}>
+        {trunc(`✕ ${e.step}${e.screen ? ` · ${e.screen}` : ''}`, maxChars)}
+      </text>
+      {e.errorCode ? (
+        <text x={bx + 10} y={stripY + 32} fontSize={11} fontFamily="monospace" fill={c.error}>
+          {e.errorCode}
+        </text>
+      ) : null}
+      {e.errorMsg ? (
+        <text x={bx + (e.errorCode ? 86 : 10)} y={stripY + 32} fontSize={11} fill={c.textMuted}>
+          {trunc(e.errorMsg, maxChars - (e.errorCode ? 16 : 0))}
+        </text>
+      ) : null}
+    </g>
+  );
+}
+
 /* ----------------------------- verdict header ----------------------------- */
-function Header({
-  props,
-}: {
-  props: SessionAutopsyChartProps;
-}) {
+function Header({ props }: { props: SessionAutopsyChartProps }) {
   const { meta, diagnostics: d, style } = props;
   const c = style.colors;
-  const badge =
-    d.outcome === 'success' ? c.ok : d.outcome === 'error' ? c.error : c.warn;
+  const badge = d.outcome === 'success' ? c.ok : d.outcome === 'error' ? c.error : c.warn;
   const metaBits = [meta.partner, meta.device, meta.user && `user ${meta.user}`, meta.startLabel]
     .filter(Boolean)
     .join(' · ');
   const chip = (label: string) => (
-    <span
-      key={label}
-      style={{
-        background: c.bgSubtle,
-        color: c.textMuted,
-        borderRadius: 6,
-        padding: '3px 9px',
-        fontSize: 12,
-        whiteSpace: 'nowrap',
-      }}
-    >
+    <span key={label} style={{ background: c.bgSubtle, color: c.textMuted, borderRadius: 6, padding: '3px 9px', fontSize: 12, whiteSpace: 'nowrap' }}>
       {label}
     </span>
   );
   return (
-    <div
-      style={{
-        border: `0.5px solid ${c.border}`,
-        borderRadius: 12,
-        padding: '12px 14px',
-        background: c.bg,
-        marginBottom: 12,
-      }}
-    >
+    <div style={{ border: `0.5px solid ${c.border}`, borderRadius: 12, padding: '12px 14px', background: c.bg, marginBottom: 12 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start' }}>
         <div>
-          <div style={{ fontSize: 15, fontWeight: 500, color: c.textPrimary }}>
-            Сессия {trunc(meta.sessionId, 22)}
-          </div>
+          <div style={{ fontSize: 15, fontWeight: 500, color: c.textPrimary }}>Сессия {trunc(meta.sessionId, 26)}</div>
           {metaBits ? (
             <div style={{ fontSize: 12, color: c.textMuted, marginTop: 2 }}>
               {metaBits}
@@ -75,30 +119,11 @@ function Header({
             </div>
           ) : null}
         </div>
-        <span
-          style={{
-            background: badge,
-            color: '#fff',
-            borderRadius: 999,
-            padding: '3px 12px',
-            fontSize: 12,
-            fontWeight: 500,
-            whiteSpace: 'nowrap',
-          }}
-        >
+        <span style={{ background: badge, color: '#fff', borderRadius: 999, padding: '3px 12px', fontSize: 12, fontWeight: 500, whiteSpace: 'nowrap' }}>
           {d.outcomeLabel}
         </span>
       </div>
-      <div
-        style={{
-          marginTop: 10,
-          padding: '8px 10px',
-          background: d.outcome === 'success' ? c.bgSubtle : c.bgDanger,
-          borderRadius: 8,
-          fontSize: 13,
-          color: d.outcome === 'success' ? c.textPrimary : c.error,
-        }}
-      >
+      <div style={{ marginTop: 10, padding: '8px 10px', background: d.outcome === 'success' ? c.bgSubtle : c.bgDanger, borderRadius: 8, fontSize: 13, color: d.outcome === 'success' ? c.textPrimary : c.error }}>
         {d.narrative}
       </div>
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 10 }}>
@@ -106,53 +131,32 @@ function Header({
         {chip(`Веток: ${d.branchesTried.length || '—'}`)}
         {chip(`Повторов: ${d.retryCount}`)}
         {chip(`Дальше всего: ${trunc(d.furthestStep, 18)}`)}
-        {d.rootCause && d.rootCause !== '—' ? chip(`Корень: ${trunc(d.rootCause, 28)}`) : null}
+        {d.rootCause && d.rootCause !== '—' ? chip(`Корень: ${trunc(d.rootCause, 30)}`) : null}
       </div>
     </div>
   );
 }
 
 /* ------------------------------- toggles ---------------------------------- */
-function Toggle({
-  view,
-  setView,
-  orientation,
-  setOrientation,
-  c,
-}: {
-  view: AutopsyView;
-  setView: (v: AutopsyView) => void;
-  orientation: AutopsyOrientation;
-  setOrientation: (o: AutopsyOrientation) => void;
+function Toggle({ view, setView, orientation, setOrientation, c }: {
+  view: AutopsyView; setView: (v: AutopsyView) => void;
+  orientation: AutopsyOrientation; setOrientation: (o: AutopsyOrientation) => void;
   c: AutopsyColors;
 }) {
   const btn = (active: boolean): CSSProperties => ({
-    border: `0.5px solid ${c.border}`,
-    background: active ? c.textPrimary : 'transparent',
-    color: active ? c.bg : c.textMuted,
-    borderRadius: 6,
-    padding: '4px 10px',
-    fontSize: 12,
-    cursor: 'pointer',
+    border: `0.5px solid ${c.border}`, background: active ? c.textPrimary : 'transparent',
+    color: active ? c.bg : c.textMuted, borderRadius: 6, padding: '4px 10px', fontSize: 12, cursor: 'pointer',
   });
   return (
     <div style={{ display: 'flex', gap: 12, marginBottom: 8, alignItems: 'center' }}>
       <div style={{ display: 'flex', gap: 4 }}>
-        <button type="button" style={btn(view === 'swimlane')} onClick={() => setView('swimlane')}>
-          Swimlane
-        </button>
-        <button type="button" style={btn(view === 'graph')} onClick={() => setView('graph')}>
-          Граф пути
-        </button>
+        <button type="button" style={btn(view === 'swimlane')} onClick={() => setView('swimlane')}>Swimlane</button>
+        <button type="button" style={btn(view === 'graph')} onClick={() => setView('graph')}>Граф пути</button>
       </div>
       {view === 'swimlane' ? (
         <div style={{ display: 'flex', gap: 4 }}>
-          <button type="button" style={btn(orientation === 'horizontal')} onClick={() => setOrientation('horizontal')}>
-            ↔ время
-          </button>
-          <button type="button" style={btn(orientation === 'vertical')} onClick={() => setOrientation('vertical')}>
-            ↕ время
-          </button>
+          <button type="button" style={btn(orientation === 'horizontal')} onClick={() => setOrientation('horizontal')}>↔ время</button>
+          <button type="button" style={btn(orientation === 'vertical')} onClick={() => setOrientation('vertical')}>↕ время</button>
         </div>
       ) : null}
     </div>
@@ -160,120 +164,101 @@ function Toggle({
 }
 
 /* ------------------------------- swimlane --------------------------------- */
-function Swimlane({
-  props,
-  orientation,
-}: {
-  props: SessionAutopsyChartProps;
-  orientation: AutopsyOrientation;
-}) {
+function Swimlane({ props, orientation }: { props: SessionAutopsyChartProps; orientation: AutopsyOrientation }) {
   const { events, lanes, laneLabels, style, width } = props;
   const c = style.colors;
+  const drill = makeDrill(props);
+  const err = events.find(e => e.status === 'error');
   const labelSpace = 86;
   const horizontal = orientation === 'horizontal';
+  const errPad = err ? 64 : 0;
+  const drillCursor = props.onContextMenu ? 'context-menu' : 'default';
 
   if (horizontal) {
     const laneH = 56;
     const topPad = 10;
-    const minStep = 66;
-    const usable = Math.max(width - labelSpace - 24, 200);
-    const step = Math.max(usable / Math.max(events.length, 1), minStep);
-    const svgW = Math.max(width - 4, labelSpace + 24 + events.length * step);
-    const svgH = topPad + lanes.length * laneH + 36;
+    const usable = Math.max(width - labelSpace - 24, 160);
+    const step = usable / Math.max(events.length, 1); // авто-fit по ширине плитки
+    const svgW = width - 4;
+    const lanesBottom = topPad + lanes.length * laneH;
+    const svgH = lanesBottom + errPad + 30;
     const laneY = (b: string) => topPad + lanes.indexOf(b) * laneH + laneH / 2;
     const nodeX = (i: number) => labelSpace + step * (i + 0.5);
+    const maxLabel = Math.max(4, Math.floor(step / 6.6));
 
     return (
-      <svg width={svgW} height={svgH}>
+      <svg width={svgW} height={svgH} style={{ maxWidth: '100%' }}>
         {lanes.map((b, li) => (
           <g key={b}>
-            <rect x={labelSpace - 6} y={topPad + li * laneH + 3} width={svgW - labelSpace - 6} height={laneH - 6} rx={6} fill={c.bgSubtle} />
+            <rect x={labelSpace - 6} y={topPad + li * laneH + 3} width={svgW - labelSpace - 2} height={laneH - 6} rx={6} fill={li % 2 ? 'transparent' : c.bgSubtle} />
             <rect x={labelSpace - 6} y={topPad + li * laneH + 3} width={3} height={laneH - 6} fill={style.branchColors[b] || c.nav} />
-            <text x={8} y={laneY(b)} fontSize={12} fill={c.textMuted} dominantBaseline="central">
-              {trunc(laneLabels[b] || b, 11)}
-            </text>
+            <text x={8} y={laneY(b)} fontSize={12} fill={c.textMuted} dominantBaseline="central">{trunc(laneLabels[b] || b, 11)}</text>
           </g>
         ))}
-        <polyline
-          points={events.map((e, i) => `${nodeX(i)},${laneY(e.branch)}`).join(' ')}
-          fill="none"
-          stroke={c.border}
-          strokeWidth={1.5}
-        />
+        <polyline points={events.map((e, i) => `${nodeX(i)},${laneY(e.branch)}`).join(' ')} fill="none" stroke={c.border} strokeWidth={1.5} />
         {events.map((e, i) => {
           const x = nodeX(i);
           const y = laneY(e.branch);
-          const r = e.status === 'error' ? 12 : 10;
+          const r = e.status === 'error' ? 12 : 9;
           return (
-            <g key={e.idx}>
-              <circle cx={x} cy={y} r={r} fill={statusFill(e, c)} stroke={c.bg} strokeWidth={3} />
+            <g key={e.idx} style={{ cursor: drillCursor }} onContextMenu={ev => drill(ev, e)}>
+              <title>{tip(e)}</title>
               {e.isRetry ? <circle cx={x} cy={y} r={r + 3} fill="none" stroke={statusFill(e, c)} strokeWidth={1} strokeDasharray="2 2" /> : null}
-              <text x={x} y={y} fontSize={11} fill="#fff" textAnchor="middle" dominantBaseline="central">
-                {e.idx}
-              </text>
-              <text x={x} y={y + r + 12} fontSize={11} fill={e.status === 'error' ? c.error : c.textMuted} textAnchor="middle">
-                {trunc((e.isBack ? '← ' : e.isRetry ? '↻ ' : '') + e.step, 11)}
+              <circle cx={x} cy={y} r={r} fill={statusFill(e, c)} stroke={c.bg} strokeWidth={3} />
+              <text x={x} y={y} fontSize={10} fill="#fff" textAnchor="middle" dominantBaseline="central">{e.idx}</text>
+              <text x={x} y={y + r + 11} fontSize={11} fill={e.status === 'error' ? c.error : c.textMuted} textAnchor="middle">
+                {trunc((e.isBack ? '← ' : e.isRetry ? '↻ ' : '') + e.step, maxLabel)}
               </text>
             </g>
           );
         })}
-        <text x={labelSpace} y={svgH - 8} fontSize={11} fill={c.textMuted}>
-          {events[0]?.timeLabel || ''}
-        </text>
-        <text x={svgW - 24} y={svgH - 8} fontSize={11} fill={c.textMuted} textAnchor="end">
-          время →
-        </text>
+        {err ? errorCallout(err, nodeX(err.idx - 1), laneY(err.branch), lanesBottom + 8, svgW, c) : null}
+        <line x1={labelSpace} y1={svgH - 6} x2={svgW - 24} y2={svgH - 6} stroke={c.border} strokeWidth={0.5} />
+        <text x={svgW - 22} y={svgH - 10} fontSize={11} fill={c.textMuted} textAnchor="end">время →</text>
       </svg>
     );
   }
 
   // vertical: lanes = columns, time downward
-  const rowH = 50;
+  const rowH = 46;
   const timeCol = 56;
   const topPad = 26;
-  const usable = Math.max(width - timeCol - 16, 200);
+  const usable = Math.max(width - timeCol - 12, 160);
   const laneW = usable / lanes.length;
-  const svgH = topPad + events.length * rowH + 16;
-  const svgW = Math.max(width - 4, timeCol + lanes.length * 120);
+  const contentBottom = topPad + events.length * rowH;
+  const svgH = contentBottom + errPad + 12;
+  const svgW = width - 4;
   const laneX = (b: string) => timeCol + lanes.indexOf(b) * laneW + laneW / 2;
   const nodeY = (i: number) => topPad + rowH * (i + 0.5);
 
   return (
-    <svg width={svgW} height={svgH}>
+    <svg width={svgW} height={svgH} style={{ maxWidth: '100%' }}>
       {lanes.map((b, li) => (
         <g key={b}>
-          <rect x={timeCol + li * laneW + 2} y={topPad - 4} width={laneW - 4} height={svgH - topPad} rx={6} fill={li % 2 ? 'transparent' : c.bgSubtle} />
-          <text x={timeCol + li * laneW + laneW / 2} y={14} fontSize={12} fill={c.textMuted} textAnchor="middle">
-            {trunc(laneLabels[b] || b, 12)}
-          </text>
+          <rect x={timeCol + li * laneW + 2} y={topPad - 4} width={laneW - 4} height={contentBottom - topPad + 8} rx={6} fill={li % 2 ? 'transparent' : c.bgSubtle} />
+          <rect x={timeCol + li * laneW + 2} y={topPad - 4} width={laneW - 4} height={3} fill={style.branchColors[b] || c.nav} />
+          <text x={timeCol + li * laneW + laneW / 2} y={14} fontSize={12} fill={c.textMuted} textAnchor="middle">{trunc(laneLabels[b] || b, 14)}</text>
         </g>
       ))}
-      <polyline
-        points={events.map((e, i) => `${laneX(e.branch)},${nodeY(i)}`).join(' ')}
-        fill="none"
-        stroke={c.border}
-        strokeWidth={1.5}
-      />
+      <polyline points={events.map((e, i) => `${laneX(e.branch)},${nodeY(i)}`).join(' ')} fill="none" stroke={c.border} strokeWidth={1.5} />
       {events.map((e, i) => {
         const x = laneX(e.branch);
         const y = nodeY(i);
-        const r = e.status === 'error' ? 12 : 10;
+        const r = e.status === 'error' ? 12 : 9;
         return (
-          <g key={e.idx}>
-            <text x={timeCol - 8} y={y} fontSize={11} fill={e.status === 'error' ? c.error : c.textMuted} textAnchor="end" dominantBaseline="central">
-              {e.timeLabel || e.idx}
-            </text>
-            <circle cx={x} cy={y} r={r} fill={statusFill(e, c)} stroke={c.bg} strokeWidth={3} />
+          <g key={e.idx} style={{ cursor: drillCursor }} onContextMenu={ev => drill(ev, e)}>
+            <title>{tip(e)}</title>
+            <text x={timeCol - 8} y={y} fontSize={11} fill={e.status === 'error' ? c.error : c.textMuted} textAnchor="end" dominantBaseline="central">{e.timeLabel || e.idx}</text>
             {e.isRetry ? <circle cx={x} cy={y} r={r + 3} fill="none" stroke={statusFill(e, c)} strokeWidth={1} strokeDasharray="2 2" /> : null}
-            <text x={x} y={y} fontSize={11} fill="#fff" textAnchor="middle" dominantBaseline="central">
-              {e.idx}
-            </text>
+            <circle cx={x} cy={y} r={r} fill={statusFill(e, c)} stroke={c.bg} strokeWidth={3} />
+            <text x={x} y={y} fontSize={10} fill="#fff" textAnchor="middle" dominantBaseline="central">{e.idx}</text>
             <text x={x + r + 6} y={y} fontSize={11} fill={e.status === 'error' ? c.error : c.textPrimary} dominantBaseline="central">
-              {trunc((e.isBack ? '← ' : e.isRetry ? '↻ ' : '') + e.step, 14)}
+              {trunc((e.isBack ? '← ' : e.isRetry ? '↻ ' : '') + e.step, Math.max(6, Math.floor(laneW / 7)))}
             </text>
           </g>
         );
       })}
+      {err ? errorCallout(err, laneX(err.branch), nodeY(err.idx - 1), contentBottom + 8, svgW, c) : null}
     </svg>
   );
 }
@@ -282,21 +267,22 @@ function Swimlane({
 function Graph({ props }: { props: SessionAutopsyChartProps }) {
   const { events, lanes, laneLabels, canonicalSteps, style, width } = props;
   const c = style.colors;
+  const drill = makeDrill(props);
   const cidx = (s: string) => {
     const i = canonicalSteps.indexOf(s);
     return i < 0 ? canonicalSteps.length : i;
   };
   const labelSpace = 86;
   const colCount = Math.max(canonicalSteps.length, 1);
-  const colW = Math.max((Math.max(width - 4, 360) - labelSpace - 24) / colCount, 96);
+  const colW = Math.max((width - 4 - labelSpace - 16) / colCount, 64); // авто-fit
   const laneH = 64;
   const topPad = 12;
-  const svgW = Math.max(width - 4, labelSpace + 24 + colCount * colW);
-  const svgH = topPad + lanes.length * laneH + 20;
+  const svgW = Math.max(width - 4, labelSpace + 16 + colCount * colW);
+  const svgH = topPad + lanes.length * laneH + 16;
   const nx = (s: string) => labelSpace + colW * (cidx(s) + 0.5);
   const ny = (b: string) => topPad + lanes.indexOf(b) * laneH + laneH / 2;
+  const drillCursor = props.onContextMenu ? 'context-menu' : 'default';
 
-  // states (branch|step) with visit count + error flag
   const states = new Map<string, { branch: string; step: string; visits: number; error: boolean }>();
   events.forEach(e => {
     const k = `${e.branch}|${e.step}`;
@@ -305,7 +291,6 @@ function Graph({ props }: { props: SessionAutopsyChartProps }) {
     if (e.status === 'error') st.error = true;
     states.set(k, st);
   });
-  // edges between consecutive states
   const edges = new Map<string, { from: string; to: string; count: number; back: boolean }>();
   for (let i = 1; i < events.length; i += 1) {
     const a = events[i - 1];
@@ -324,16 +309,14 @@ function Graph({ props }: { props: SessionAutopsyChartProps }) {
   };
 
   return (
-    <svg width={svgW} height={svgH}>
+    <svg width={svgW} height={svgH} style={{ maxWidth: '100%' }}>
       <defs>
         <marker id="sa-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
           <path d="M2 1L8 5L2 9" fill="none" stroke="context-stroke" strokeWidth="1.5" strokeLinecap="round" />
         </marker>
       </defs>
       {lanes.map(b => (
-        <text key={b} x={8} y={ny(b)} fontSize={12} fill={c.textMuted} dominantBaseline="central">
-          {trunc(laneLabels[b] || b, 11)}
-        </text>
+        <text key={b} x={8} y={ny(b)} fontSize={12} fill={c.textMuted} dominantBaseline="central">{trunc(laneLabels[b] || b, 11)}</text>
       ))}
       {Array.from(edges.values()).map(ed => {
         const p1 = pos(ed.from);
@@ -341,48 +324,27 @@ function Graph({ props }: { props: SessionAutopsyChartProps }) {
         if (ed.back) {
           const mx = (p1.x + p2.x) / 2;
           const my = Math.min(p1.y, p2.y) - 26;
-          return (
-            <path
-              key={`${ed.from}>${ed.to}`}
-              d={`M${p1.x} ${p1.y} Q${mx} ${my} ${p2.x} ${p2.y}`}
-              fill="none"
-              stroke={c.warn}
-              strokeWidth={1.5}
-              strokeDasharray="5 3"
-              markerEnd="url(#sa-arrow)"
-            />
-          );
+          return <path key={`${ed.from}>${ed.to}`} d={`M${p1.x} ${p1.y} Q${mx} ${my} ${p2.x} ${p2.y}`} fill="none" stroke={c.warn} strokeWidth={1.5} strokeDasharray="5 3" markerEnd="url(#sa-arrow)" />;
         }
-        return (
-          <line
-            key={`${ed.from}>${ed.to}`}
-            x1={p1.x}
-            y1={p1.y}
-            x2={p2.x}
-            y2={p2.y}
-            stroke={c.textMuted}
-            strokeWidth={1.5}
-            markerEnd="url(#sa-arrow)"
-          />
-        );
+        return <line key={`${ed.from}>${ed.to}`} x1={p1.x} y1={p1.y} x2={p2.x} y2={p2.y} stroke={c.textMuted} strokeWidth={1.5} markerEnd="url(#sa-arrow)" />;
       })}
       {Array.from(states.values()).map(st => {
         const x = nx(st.step);
         const y = ny(st.branch);
-        const w = Math.min(colW - 14, 104);
+        const w = Math.min(colW - 12, 108);
         const col = st.error ? c.error : style.branchColors[st.branch] || c.nav;
+        const ev = events.find(e => e.branch === st.branch && e.step === st.step)!;
         return (
-          <g key={`${st.branch}|${st.step}`}>
+          <g key={`${st.branch}|${st.step}`} style={{ cursor: drillCursor }} onContextMenu={e => drill(e, st)}>
+            <title>{tip(ev)}{st.visits > 1 ? ` · заходов: ${st.visits}` : ''}</title>
             <rect x={x - w / 2} y={y - 15} width={w} height={30} rx={8} fill={c.bg} stroke={col} strokeWidth={st.error ? 1.5 : 1} />
-            <text x={x} y={y} fontSize={11} fill={c.textPrimary} textAnchor="middle" dominantBaseline="central">
-              {trunc((st.error ? '✕ ' : '') + st.step, Math.floor(w / 7))}
+            <text x={x} y={y} fontSize={11} fill={st.error ? c.error : c.textPrimary} textAnchor="middle" dominantBaseline="central">
+              {trunc((st.error ? '✕ ' : '') + st.step, Math.floor(w / 6.6))}
             </text>
             {st.visits > 1 ? (
               <g>
                 <circle cx={x + w / 2 - 2} cy={y - 14} r={8} fill={c.warn} />
-                <text x={x + w / 2 - 2} y={y - 14} fontSize={10} fill="#fff" textAnchor="middle" dominantBaseline="central">
-                  {st.visits}
-                </text>
+                <text x={x + w / 2 - 2} y={y - 14} fontSize={10} fill="#fff" textAnchor="middle" dominantBaseline="central">{st.visits}</text>
               </g>
             ) : null}
           </g>
@@ -402,16 +364,17 @@ export default function SessionAutopsyChart(props: SessionAutopsyChartProps) {
   useEffect(() => setOrientation(style.orientation), [style.orientation]);
 
   return (
-    <div style={{ width, height, overflow: 'auto', color: c.textPrimary, fontFamily: 'inherit' }}>
+    <div style={{ width, height, overflow: 'auto', color: c.textPrimary, fontFamily: 'inherit', boxSizing: 'border-box', padding: 2 }}>
       <Header props={props} />
       {events.length === 0 ? (
-        <div style={{ color: c.textMuted, fontSize: 13, padding: 12 }}>
-          Нет событий для этой сессии. Проверьте Session ID и маппинг колонок.
-        </div>
+        <div style={{ color: c.textMuted, fontSize: 13, padding: 12 }}>Нет событий для этой сессии. Проверьте Session ID и маппинг колонок.</div>
       ) : (
         <>
           <Toggle view={view} setView={setView} orientation={orientation} setOrientation={setOrientation} c={c} />
           {view === 'swimlane' ? <Swimlane props={props} orientation={orientation} /> : <Graph props={props} />}
+          {props.onContextMenu ? (
+            <div style={{ fontSize: 11, color: c.textMuted, marginTop: 8 }}>Правый клик по шагу — сырьё события (drill to detail)</div>
+          ) : null}
         </>
       )}
     </div>

@@ -240,6 +240,8 @@ export default function transformProps(chartProps: ChartProps) {
     bgWarn: th?.colorWarningBg ?? 'rgba(239,159,39,0.14)',
   };
 
+  const onContextMenu = (chartProps as Record<string, any>)?.hooks?.onContextMenu;
+
   return {
     width,
     height,
@@ -249,6 +251,8 @@ export default function transformProps(chartProps: ChartProps) {
     diagnostics,
     meta,
     canonicalSteps: canon,
+    columns: { session: kSession, step: kStep, branch: kBranch },
+    onContextMenu,
     style: {
       view: defaultView === 'graph' ? 'graph' : 'swimlane',
       orientation: orientation === 'vertical' ? 'vertical' : 'horizontal',

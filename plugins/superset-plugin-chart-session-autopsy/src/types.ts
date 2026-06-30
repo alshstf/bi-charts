@@ -73,4 +73,12 @@ export interface SessionAutopsyChartProps {
   meta: SessionMeta;
   canonicalSteps: string[];
   style: SessionAutopsyStyle;
+  /** имена колонок датасета — для drill-to-detail фильтров */
+  columns: { session: string | null; step: string | null; branch: string | null };
+  /** хук Superset для контекстного меню (drill to detail) — есть на дашборде */
+  onContextMenu?: (
+    clientX: number,
+    clientY: number,
+    payload: Record<string, unknown>,
+  ) => void;
 }

@@ -19,7 +19,7 @@ export default class SessionAutopsyChartPlugin extends ChartPlugin {
             'to diagnose «what went wrong» at a glance. Reads raw event rows for one session_id.',
         ),
         thumbnail,
-        behaviors: [Behavior.InteractiveChart],
+        behaviors: [Behavior.InteractiveChart, Behavior.DrillToDetail],
         category: t('KPI'),
         tags: [t('GigaID'), t('Diagnostics'), t('Session'), t('Flow')],
       }),
