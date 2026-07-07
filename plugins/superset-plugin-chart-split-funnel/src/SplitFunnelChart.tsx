@@ -18,7 +18,8 @@ use([CustomChart, LegendComponent, TooltipComponent, CanvasRenderer]);
 const Styles = styled.div<{ height: number; width: number }>`
   height: ${({ height }: { height: number }) => height}px;
   width: ${({ width }: { width: number }) => width}px;
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: auto;
 `;
 
 const numFmt = getNumberFormatter(',d');
@@ -36,6 +37,7 @@ interface Connector {
 interface RectMeta {
   step?: string;
   branch?: string;
+  subbranch?: string;
   facet?: string | null;
 }
 
@@ -50,6 +52,8 @@ interface Geom {
     labelColor: string;
     bold?: boolean;
     labelAlign?: 'left' | 'center' | 'right';
+    /** явная ширина метки (для узких баров/сегментов — берём по колонке) */
+    labelWidth?: number;
     meta?: RectMeta;
     /** подсветка утечки: бейдж «▼ NN%» + блок выпавшего объёма */
     leak?: { drop: number; lostW: number; badgeDX: number };
@@ -95,14 +99,34 @@ function geomBottom(layout: {
   return max;
 }
 
-/** имя финального шага, общего для всех веток (для слияния), либо null */
+/** вход в контейнер (значение первого шага ствола, либо сумма входов веток) */
+function containerEntry(d: SplitFunnelData): number {
+  if (d.trunk.length) return d.trunk[0].value;
+  return Object.values(d.branches).reduce((a, b) => a + containerEntry(b), 0);
+}
+
+/** финальный сегмент контейнера: имя и значение, к которому он сходится.
+ *  Лист → последний шаг ствола. Контейнер с ветками → общий финал (рекурсивно),
+ *  значение = сумма финалов веток. */
+function containerFinal(d: SplitFunnelData): { name: string | null; value: number } {
+  const names = Object.keys(d.branches);
+  if (names.length === 0) {
+    const last = d.trunk[d.trunk.length - 1];
+    return { name: last?.name ?? null, value: last?.value ?? 0 };
+  }
+  const finals = names.map(b => containerFinal(d.branches[b]));
+  const common =
+    finals.length >= 1 && finals.every(f => f.name && f.name === finals[0].name)
+      ? finals[0].name
+      : null;
+  return { name: common, value: finals.reduce((a, f) => a + f.value, 0) };
+}
+
+/** имя финального шага, общего для всех веток контейнера (для слияния), либо null */
 function detectCommonFinal(data: SplitFunnelData): string | null {
   const names = Object.keys(data.branches);
   if (names.length < 2) return null;
-  const lasts = names.map(b => {
-    const steps = data.branches[b];
-    return steps.length >= 2 ? steps[steps.length - 1].name : null;
-  });
+  const lasts = names.map(b => containerFinal(data.branches[b]).name);
   return lasts.every(n => n !== null && n === lasts[0]) ? lasts[0] : null;
 }
 
@@ -111,7 +135,9 @@ function detectCommonFinal(data: SplitFunnelData): string | null {
 export interface Leak {
   /** null = переход внутри ствола, иначе имя ветки */
   branch: string | null;
-  /** индекс шага-приёмника (в стволе или в полном списке шагов ветки) */
+  /** имя подветки, если утечка внутри подветки (иначе undefined) */
+  subbranch?: string;
+  /** индекс шага-приёмника (в стволе или в полном списке шагов ветки/подветки) */
   toIndex: number;
   toStep: string;
   /** доля потери 0..1 */
@@ -126,6 +152,7 @@ function detectLeak(
   const cands: Leak[] = [];
   const consider = (
     branch: string | null,
+    subbranch: string | undefined,
     toIndex: number,
     toStep: string,
     fromValue: number,
@@ -133,22 +160,39 @@ function detectLeak(
   ) => {
     if (fromValue <= 0 || toValue < 0) return;
     const drop = 1 - toValue / fromValue;
-    if (drop > 0) cands.push({ branch, toIndex, toStep, drop });
+    if (drop > 0) cands.push({ branch, subbranch, toIndex, toStep, drop });
   };
   for (let i = 1; i < data.trunk.length; i += 1) {
     consider(
       null,
+      undefined,
       i,
       data.trunk[i].name,
       data.trunk[i - 1].value,
       data.trunk[i].value,
     );
   }
-  Object.entries(data.branches).forEach(([b, steps]) => {
+  Object.entries(data.branches).forEach(([b, bd]) => {
     if (!visible.includes(b)) return;
+    const steps = bd.trunk;
     for (let k = 1; k < steps.length; k += 1) {
-      consider(b, k, steps[k].name, steps[k - 1].value, steps[k].value);
+      consider(b, undefined, k, steps[k].name, steps[k - 1].value, steps[k].value);
     }
+    // подветки: провал шаг-к-шагу внутри каждой подветки
+    Object.entries(bd.branches).forEach(([s, sd]) => {
+      if (!visible.includes(s)) return;
+      const sSteps = sd.trunk;
+      for (let k = 1; k < sSteps.length; k += 1) {
+        consider(
+          b,
+          s,
+          k,
+          sSteps[k].name,
+          sSteps[k - 1].value,
+          sSteps[k].value,
+        );
+      }
+    });
   });
   if (!cands.length) return null;
   const best = cands.reduce((a, c) => (c.drop > a.drop ? c : a));
@@ -202,10 +246,15 @@ function computeLayout(
   collapsed: boolean,
   leak: Leak | null,
   opts: { compact?: boolean; topPad?: number; sparkline?: boolean } = {},
+  collapsedSubs: Record<string, boolean> = {},
 ): {
   trunk: Geom;
   branches: Record<string, Geom>;
-  toggle: { x: number; y: number } | null;
+  subGeoms: Record<
+    string,
+    { geom: Geom; title: string; steps: FunnelStep[]; color: string }
+  >;
+  toggles: { key: string; x: number; y: number; collapsed: boolean }[];
 } {
   const compact = !!opts.compact;
   // sparkline = свёрнутая ячейка сетки: стопка вплотную, без коннекторов
@@ -272,21 +321,208 @@ function computeLayout(
   const trunkLast = data.trunk[data.trunk.length - 1];
   const splitBase =
     trunkLast?.value ??
-    Object.values(data.branches).reduce(
-      (acc, s) => acc + (s[0]?.value ?? 0),
-      0,
-    );
+    Object.values(data.branches).reduce((acc, s) => acc + containerEntry(s), 0);
 
-  const shown = visible.filter(b => data.branches[b]?.length);
+  const shown = visible.filter(b => {
+    const bd = data.branches[b];
+    return bd && (bd.trunk.length > 0 || Object.keys(bd.branches).length > 0);
+  });
   const n = shown.length || 1;
   const colW = (maxW - (n - 1) * colGap) / n;
+
+  // геомы под-веток — отдельными сериями (у каждой под-ветки свой тултип)
+  const subGeomsOut: Record<
+    string,
+    { geom: Geom; title: string; steps: FunnelStep[]; color: string }
+  > = {};
+  // пиктограммы сворачивания: верхняя развилка (key='__top') + под-развилки (key=имя ветки)
+  const togglesOut: { key: string; x: number; y: number; collapsed: boolean }[] =
+    [];
+
+  // --- рекурсивный рендер под-сплита (2-й уровень) внутри колонки ветки -----
+  // рисует под-ветки контейнера как под-колонки + их слияние, возвращает нижний Y.
+  const renderSubSplit = (
+    g: Geom,
+    container: SplitFunnelData,
+    parentBranch: string,
+    x0: number,
+    cw: number,
+    top: number,
+  ): number => {
+    const subMerge = style.mergeFinalStep ? detectCommonFinal(container) : null;
+    const subCols = Object.keys(container.branches).filter(s => {
+      if (!visible.includes(s)) return false;
+      const sd = container.branches[s];
+      return sd.trunk.length > 0 || Object.keys(sd.branches).length > 0;
+    });
+    if (!subCols.length) return top;
+    const parentColor = style.branchColors[parentBranch];
+    const subGap = 8;
+    const nn = subCols.length;
+    const subW = (cw - (nn - 1) * subGap) / nn;
+    const subHeaderH = Math.max(headerH - 6, 15);
+    const subBarH = Math.max(branchBarH - 3, 14);
+    const subEntry = containerEntry(container) || 1;
+    const finals = subCols.map(s => containerFinal(container.branches[s]).value);
+    const collapsedHere = !!collapsedSubs[parentBranch];
+    if (style.collapsible && subMerge) {
+      togglesOut.push({
+        key: parentBranch,
+        x: x0 + cw / 2,
+        y: top - 6,
+        collapsed: collapsedHere,
+      });
+    }
+    const bottoms: number[] = [];
+    if (!collapsedHere) subCols.forEach((s, j) => {
+      const sd = container.branches[s];
+      const sAll = sd.trunk;
+      const sSteps = subMerge ? sAll.slice(0, -1) : sAll;
+      const sEntryV = containerEntry(sd) || 1;
+      const sx = x0 + j * (subW + subGap);
+      const color = style.branchColors[s] ?? parentColor;
+      // под-ветку рисуем в СВОЙ геом (отдельная серия -> собственный тултип)
+      const sg: Geom = { rects: [], connectors: [] };
+      subGeomsOut[`${parentBranch} ${s}`] = {
+        geom: sg,
+        title: `${parentBranch} / ${s}`,
+        steps: sd.trunk,
+        color,
+      };
+      sg.rects.push({
+        x: sx,
+        y: top,
+        w: subW,
+        h: subHeaderH,
+        fill: color,
+        label: `${s} · ${pctFmt(subEntry > 0 ? sEntryV / subEntry : NaN)}`,
+        labelColor: style.barText,
+        bold: true,
+        meta: { branch: parentBranch, subbranch: s },
+      });
+      sSteps.forEach((st, k) => {
+        const w = Math.max((st.value / sEntryV) * subW, 4);
+        sg.rects.push({
+          x: alignX(sx, subW, w),
+          y: top + subHeaderH + 6 + k * (subBarH + branchGap),
+          w,
+          h: subBarH,
+          fill: color,
+          label: barLabel(
+            st,
+            {
+              previous: k === 0 ? sEntryV : sSteps[k - 1].value,
+              container: sEntryV,
+              e2e: trunkRef || sEntryV,
+            },
+            style.valueDisplay,
+            style.percentBasis,
+          ),
+          labelColor: style.barText,
+          labelAlign: style.barAlignment,
+          labelWidth: Math.max(subW - 12, 24),
+          meta: { branch: parentBranch, subbranch: s, step: st.name },
+        });
+        if (
+          leak &&
+          leak.branch === parentBranch &&
+          leak.subbranch === s &&
+          leak.toIndex === k
+        ) {
+          const prevW = Math.max((sSteps[k - 1].value / sEntryV) * subW, 4);
+          const r = sg.rects[sg.rects.length - 1];
+          r.leak = {
+            drop: leak.drop,
+            lostW: Math.max(prevW - w, 0),
+            badgeDX: sx + subW - r.x,
+          };
+        }
+      });
+      bottoms.push(
+        top + subHeaderH + 6 + sSteps.length * (subBarH + branchGap) - branchGap,
+      );
+      g.connectors.push({
+        x1: x0 + cw / 2,
+        y1: top - 4,
+        x2: sx + subW / 2,
+        y2: top - 1,
+        color,
+      });
+    });
+    if (!subMerge) return collapsedHere ? top : Math.max(...bottoms);
+    // сегментированный под-merge: свёрнуто — сразу под стволом ветки, иначе — под колонками
+    const total = finals.reduce((a, v) => a + v, 0) || 1;
+    const mt = collapsedHere ? top + 2 : Math.max(...bottoms) + 18;
+    const mhh = Math.max(mh - 4, 16);
+    let cx = x0;
+    subCols.forEach((s, j) => {
+      const v = finals[j];
+      const w =
+        j === subCols.length - 1 ? x0 + cw - cx : Math.max((v / total) * cw, 4);
+      const color = style.branchColors[s] ?? parentColor;
+      // бейдж утечки на сегменте под-merge: свёрнуто — любой внутренний провал
+      // под-ветки, развёрнуто — только если худший провал на финальном шаге
+      const subLeakHit =
+        !!leak &&
+        leak.branch === parentBranch &&
+        leak.subbranch === s &&
+        (collapsedHere ||
+          leak.toIndex === container.branches[s].trunk.length - 1);
+      const seg = {
+        x: cx,
+        y: mt,
+        w,
+        h: mhh,
+        fill: color,
+        // свёрнуто: имя под-ветки + значение + доля (колонок-заголовков уже нет);
+        // развёрнуто: только значение (имя есть на заголовке под-колонки выше)
+        label: collapsedHere
+          ? `${s} · ${numFmt(v)} · ${pctFmt(total > 0 ? v / total : NaN)}`
+          : numFmt(v),
+        labelColor: style.barText,
+        labelWidth: Math.max(w - 8, 18),
+        meta: { branch: parentBranch, subbranch: s, step: subMerge },
+        ...(subLeakHit && leak
+          ? { leak: { drop: leak.drop, lostW: 0, badgeDX: w } }
+          : {}),
+      };
+      if (collapsedHere) {
+        // свёрнутый сегмент под-ветки — своя серия со своим тултипом (шаги под-ветки)
+        subGeomsOut[`${parentBranch} ${s}`] = {
+          geom: { rects: [seg], connectors: [] },
+          title: `${parentBranch} / ${s}`,
+          steps: container.branches[s].trunk,
+          color,
+        };
+      } else {
+        g.rects.push(seg);
+      }
+      g.connectors.push(
+        collapsedHere
+          ? { x1: x0 + cw / 2, y1: top - 4, x2: cx + w / 2, y2: mt - 3, color }
+          : {
+              x1: x0 + j * (subW + subGap) + subW / 2,
+              y1: bottoms[j] + 2,
+              x2: cx + w / 2,
+              y2: mt - 3,
+              color,
+            },
+      );
+      cx += w;
+    });
+    // подпись под-merge не рисуем (дублирует сегментированный бар и ствол-merge)
+    return mt + mhh;
+  };
 
   const branchGeoms: Record<string, Geom> = {};
   const colBottoms: Record<string, number> = {};
   if (!collapsed) shown.forEach((b, j) => {
-    const allSteps = data.branches[b];
-    const steps = mergeName ? allSteps.slice(0, -1) : allSteps;
-    const entry = allSteps[0]?.value || 1;
+    const bd = data.branches[b];
+    const hasSub = Object.keys(bd.branches).length > 0;
+    const allSteps = bd.trunk;
+    // лист: финальный шаг сливает родитель -> отрезаем; вложенная ветка: ствол целиком
+    const steps = mergeName && !hasSub ? allSteps.slice(0, -1) : allSteps;
+    const entry = containerEntry(bd) || 1;
     const x0 = pad + j * (colW + colGap);
     const g: Geom = { rects: [], connectors: [] };
     const share = splitBase > 0 ? entry / splitBase : NaN;
@@ -324,7 +560,7 @@ function computeLayout(
         labelAlign: style.barAlignment,
         meta: { branch: b, step: s.name },
       });
-      if (leak && leak.branch === b && leak.toIndex === k) {
+      if (leak && leak.branch === b && !leak.subbranch && leak.toIndex === k) {
         const prevW = Math.max((steps[k - 1].value / entry) * colW, 4);
         const r = g.rects[g.rects.length - 1];
         r.leak = {
@@ -334,8 +570,12 @@ function computeLayout(
         };
       }
     });
-    colBottoms[b] =
+    let colBottom =
       branchTop + headerH + 8 + steps.length * (branchBarH + branchGap) - branchGap;
+    if (hasSub) {
+      colBottom = renderSubSplit(g, bd, b, x0, colW, colBottom + 14);
+    }
+    colBottoms[b] = colBottom;
     if (trunkLast) {
       const lastRect = trunkGeom.rects[trunkGeom.rects.length - 1];
       const colCenter = x0 + colW / 2;
@@ -356,15 +596,12 @@ function computeLayout(
 
   // --- слияние общего финального шага в сегментированный итоговый бар ---
   if (mergeName && shown.length) {
-    const finals = shown.map(b => {
-      const s = data.branches[b];
-      return s[s.length - 1].value;
-    });
+    const finals = shown.map(b => containerFinal(data.branches[b]).value);
     /** подпись сегмента: уважает value display и базисы; имя ветки — только
      *  в свёрнутом виде (в развёрнутом её называет заголовок колонки) */
     const segLabel = (b: string, v: number): string => {
-      const allSteps = data.branches[b];
-      const entry = allSteps[0]?.value || 1;
+      const allSteps = data.branches[b].trunk;
+      const entry = containerEntry(data.branches[b]) || 1;
       const prev =
         allSteps.length >= 2 ? allSteps[allSteps.length - 2].value : entry;
       const full = barLabel(
@@ -408,10 +645,11 @@ function computeLayout(
       });
       // в свёрнутой ячейке (или если худший провал — на финальном шаге)
       // вешаем бейдж на сегмент успеха этой ветки
-      const allStepsB = data.branches[b];
+      const allStepsB = data.branches[b].trunk;
       if (
         leak &&
         leak.branch === b &&
+        !leak.subbranch &&
         (collapsed || leak.toIndex === allStepsB.length - 1)
       ) {
         const segR = g.rects[g.rects.length - 1];
@@ -461,19 +699,23 @@ function computeLayout(
     }
   }
 
-  // --- пиктограмма схлопывания на развилке -------------------------------
-  let toggle: { x: number; y: number } | null = null;
+  // --- пиктограмма схлопывания верхней развилки --------------------------
+  // (по центру, в зазоре между стволом и ветками — НЕ поверх бара)
   if (style.collapsible && mergeName && data.trunk.length) {
-    const lastRect = trunkGeom.rects[data.trunk.length - 1];
-    const rightX = lastRect.x + lastRect.w + 18;
-    const x =
-      rightX <= pad + maxW - 2
-        ? rightX
-        : Math.max(lastRect.x - 18, pad + 12);
-    toggle = { x, y: lastRect.y + lastRect.h / 2 };
+    togglesOut.push({
+      key: '__top',
+      x: pad + maxW / 2,
+      y: trunkBottom + 12,
+      collapsed,
+    });
   }
 
-  return { trunk: trunkGeom, branches: branchGeoms, toggle };
+  return {
+    trunk: trunkGeom,
+    branches: branchGeoms,
+    subGeoms: subGeomsOut,
+    toggles: togglesOut,
+  };
 }
 
 function geomToChildren(g: Geom, fz = 12): Record<string, any>[] {
@@ -539,7 +781,7 @@ function geomToChildren(g: Geom, fz = 12): Record<string, any>[] {
         align,
         verticalAlign: 'middle',
         overflow: 'truncate',
-        width: Math.max(r.w - 16, 24),
+        width: r.labelWidth ?? Math.max(r.w - 16, 24),
       },
     });
     if (r.leak) {
@@ -581,6 +823,18 @@ function geomToChildren(g: Geom, fz = 12): Record<string, any>[] {
   return children;
 }
 
+/** плоский список шагов ветки для тултипа (ствол ветки + её под-ветки с префиксом) */
+function branchTooltipSteps(d: SplitFunnelData): FunnelStep[] {
+  if (!Object.keys(d.branches).length) return d.trunk;
+  const out: FunnelStep[] = [...d.trunk];
+  Object.entries(d.branches).forEach(([s, sd]) => {
+    branchTooltipSteps(sd).forEach(st =>
+      out.push({ ...st, name: `${s}: ${st.name}` }),
+    );
+  });
+  return out;
+}
+
 function branchTooltip(steps: FunnelStep[], name: string): string {
   const entry = steps[0]?.value || 0;
   const rows = steps
@@ -602,7 +856,7 @@ function buildFacetSeries(
   dx: number,
   dy: number,
   visible: string[],
-  collapsed: boolean,
+  collapsed: Record<string, boolean>,
   facetMode: boolean,
 ): {
   series: Record<string, any>[];
@@ -614,29 +868,39 @@ function buildFacetSeries(
   const mergeName = style.mergeFinalStep ? detectCommonFinal(data) : null;
   // в сетке compact = свёрнутый спарклайн (если есть общий финал для слияния)
   const compactCell = facetMode && style.gridCellDetail === 'compact';
-  const wantCollapsed = facetMode ? compactCell : collapsed;
+  const wantCollapsed = facetMode ? compactCell : !!collapsed['__top'];
   const isCollapsed = wantCollapsed && !!mergeName;
   const sparkline = compactCell && isCollapsed;
   const cellStyle = facetMode ? { ...style, collapsible: false } : style;
-  const visibleF = visible.filter(b => data.branches[b]);
+  // не отсекаем имена под-веток: их нет в data.branches верхнего уровня, но они
+  // нужны renderSubSplit для фильтра видимости. Верхний уровень (shown) и под-сплит
+  // сами отбирают присутствующие ветки.
+  const visibleF = visible;
   const leak = style.highlightDrop
     ? detectLeak(data, style.dropThreshold, visibleF)
     : null;
-  const layout0 = computeLayout(data, cellStyle, cellW, visibleF, mergeName, isCollapsed, leak, {
-    compact: facetMode,
-    topPad: facetMode ? (facet.name !== null ? 24 : 8) : undefined,
-    sparkline,
-  });
+  const layout0 = computeLayout(
+    data,
+    cellStyle,
+    cellW,
+    visibleF,
+    mergeName,
+    isCollapsed,
+    leak,
+    {
+      compact: facetMode,
+      topPad: facetMode ? (facet.name !== null ? 24 : 8) : undefined,
+      sparkline,
+    },
+    facetMode ? {} : collapsed,
+  );
   if (facetMode && facet.name !== null) {
     const trunkFirst = data.trunk[0]?.value ?? 0;
     let title = facet.name;
     if (mergeName && trunkFirst > 0) {
       const total = Object.keys(data.branches)
         .filter(b => visibleF.includes(b))
-        .reduce((acc, b) => {
-          const s = data.branches[b];
-          return acc + (s[s.length - 1]?.value ?? 0);
-        }, 0);
+        .reduce((acc, b) => acc + containerFinal(data.branches[b]).value, 0);
       // в спарклайне заголовок несёт и абсолют, и E2E (отдельного итог-бара нет)
       title += sparkline
         ? ` · ${numFmt(total)} · ${pctFmt(total / trunkFirst)} E2E`
@@ -653,10 +917,6 @@ function buildFacetSeries(
   const layout = {
     trunk: shiftGeom(layout0.trunk, dx, dy),
     branches: shiftedBranches,
-    toggle:
-      layout0.toggle && !facetMode
-        ? { x: layout0.toggle.x + dx, y: layout0.toggle.y + dy }
-        : null,
   };
   const fz = facetMode ? 11 : 12;
   const hitRects: HitRect[] = [];
@@ -700,51 +960,88 @@ function buildFacetSeries(
           : { type: 'group', children: [] },
       tooltip: {
         formatter: () =>
-          branchTooltip(data.branches[b], facet.name ? `${b} — ${facet.name}` : b),
+          branchTooltip(
+            data.branches[b].trunk,
+            facet.name ? `${b} — ${facet.name}` : b,
+          ),
       },
     })),
   ];
-  if (layout.toggle) {
-    const { x, y } = layout.toggle;
+  // отдельная серия на каждую под-ветку — свой тултип (только её шаги)
+  Object.entries(layout0.subGeoms).forEach(([key, info]) => {
+    const sg = shiftGeom(info.geom, dx, dy);
+    collectHits(sg);
     series.push({
-      name: '__toggle',
+      name: `__sub_${idx}_${key}`,
       type: 'custom',
       coordinateSystem: 'none',
-      cursor: 'pointer',
       data: [0],
-      silent: false,
+      itemStyle: { color: info.color },
+      renderItem: () => ({ type: 'group', children: geomToChildren(sg, fz) }),
       tooltip: {
         formatter: () =>
-          isCollapsed
-            ? 'Развернуть ветки'
-            : 'Свернуть ветки',
+          branchTooltip(
+            info.steps,
+            facet.name ? `${info.title} — ${facet.name}` : info.title,
+          ),
       },
-      renderItem: () => ({
-        type: 'group',
-        children: [
-          {
-            type: 'circle',
-            shape: { cx: x, cy: y, r: 10 },
-            style: { fill: style.trunkFill, opacity: 0.95 },
-          },
-          {
-            type: 'text',
-            style: {
-              x,
-              y: y + 0.5,
-              text: isCollapsed ? '+' : '−',
-              fill: style.trunkText,
-              fontSize: 14,
-              fontWeight: 600,
-              align: 'center',
-              verticalAlign: 'middle',
+    });
+  });
+  // тогглы (верхняя развилка + под-развилки) — только в одиночном режиме (не в сетке)
+  if (!facetMode) {
+    layout0.toggles.forEach(tg => {
+      const x = tg.x + dx;
+      const y = tg.y + dy;
+      const isTop = tg.key === '__top';
+      series.push({
+        name: `__toggle:${tg.key}`,
+        type: 'custom',
+        coordinateSystem: 'none',
+        cursor: 'pointer',
+        data: [0],
+        silent: false,
+        z: 100,
+        emphasis: { disabled: true },
+        tooltip: {
+          formatter: () => (tg.collapsed ? 'Развернуть' : 'Свернуть'),
+        },
+        renderItem: () => ({
+          type: 'group',
+          children: [
+            {
+              type: 'circle',
+              shape: { cx: x, cy: y, r: isTop ? 12 : 10 },
+              style: {
+                fill: style.trunkFill,
+                opacity: 1,
+                stroke: style.mutedText,
+                lineWidth: 1,
+              },
             },
-          },
-        ],
-      }),
+            {
+              type: 'text',
+              style: {
+                x,
+                y: y + 0.5,
+                text: tg.collapsed ? '+' : '−',
+                fill: style.trunkText,
+                fontSize: isTop ? 14 : 12,
+                fontWeight: 600,
+                align: 'center',
+                verticalAlign: 'middle',
+              },
+            },
+          ],
+        }),
+      });
     });
   }
-  return { series, bottom: geomBottom(layout), toggle: !!layout.toggle, hitRects };
+  return {
+    series,
+    bottom: geomBottom(layout),
+    toggle: layout0.toggles.length > 0,
+    hitRects,
+  };
 }
 
 function buildOption(
@@ -752,15 +1049,17 @@ function buildOption(
   style: SplitFunnelStyle,
   width: number,
   selected?: Record<string, boolean>,
-  collapsed = false,
+  collapsed: Record<string, boolean> = {},
 ) {
   // Ð¾Ð±ÑÐµÐ´Ð¸Ð½ÑÐ½Ð½ÑÐ¹ ÑÐ¿Ð¸ÑÐ¾Ðº Ð²ÐµÑÐ¾Ðº Ð¿Ð¾ Ð²ÑÐµÐ¼ ÑÐ°ÑÐµÑÐ°Ð¼ â Ð¾Ð±ÑÐ°Ñ Ð»ÐµÐ³ÐµÐ½Ð´Ð°
   const branchTotals: Record<string, number> = {};
-  facets.forEach(f =>
-    Object.entries(f.data.branches).forEach(([b, steps]) => {
-      branchTotals[b] = (branchTotals[b] ?? 0) + (steps[0]?.value ?? 0);
-    }),
-  );
+  const collectTotals = (d: SplitFunnelData) => {
+    Object.entries(d.branches).forEach(([b, bd]) => {
+      branchTotals[b] = (branchTotals[b] ?? 0) + containerEntry(bd);
+      collectTotals(bd);
+    });
+  };
+  facets.forEach(f => collectTotals(f.data));
   const allBranches = Object.keys(branchTotals).sort(
     (a, b) => branchTotals[b] - branchTotals[a],
   );
@@ -817,43 +1116,63 @@ function buildOption(
       series,
     },
     hitRects,
+    // полная высота контента сетки — чтобы канвас растянуть под неё и дать скролл
+    contentHeight: rowBottom + 8,
   };
 }
 
 export default function SplitFunnelChart(props: SplitFunnelChartProps) {
   const { facets, style, width, height, columns, onContextMenu } = props;
-  const divRef = useRef<HTMLDivElement>(null);
+  const divRef = useRef<HTMLDivElement>(null); // скролл-контейнер
+  const innerRef = useRef<HTMLDivElement>(null); // точка монтирования ECharts
   const chartRef = useRef<EChartsType>();
   const selectedRef = useRef<Record<string, boolean> | undefined>(undefined);
-  const collapsedRef = useRef<boolean>(style.startCollapsed);
+  // состояние сворачивания по ключам: '__top' — верхняя развилка, имя ветки — под-развилка
+  const collapsedRef = useRef<Record<string, boolean>>(
+    style.startCollapsed ? { __top: true } : {},
+  );
   const hitRectsRef = useRef<HitRect[]>([]);
-  const propsRef = useRef({ facets, style, width, columns, onContextMenu });
-  propsRef.current = { facets, style, width, columns, onContextMenu };
+  const propsRef = useRef({ facets, style, width, height, columns, onContextMenu });
+  propsRef.current = { facets, style, width, height, columns, onContextMenu };
+
+  // Перерисовка: канвас растягиваем на высоту контента (>= видимой),
+  // корневой контейнер скроллит вертикально, если сетка не влезла.
+  const render = () => {
+    const p = propsRef.current;
+    const r = buildOption(
+      p.facets,
+      p.style,
+      p.width,
+      selectedRef.current,
+      collapsedRef.current,
+    );
+    hitRectsRef.current = r.hitRects;
+    const canvasH = Math.max(p.height, r.contentHeight);
+    if (innerRef.current) {
+      innerRef.current.style.width = `${p.width}px`;
+      innerRef.current.style.height = `${canvasH}px`;
+    }
+    chartRef.current?.resize({ width: p.width, height: canvasH });
+    chartRef.current?.setOption(r.option, { replaceMerge: ['series'] });
+  };
 
   useEffect(() => {
-    if (!divRef.current) return;
-    const apply = () => {
-      const p = propsRef.current;
-      const r = buildOption(
-        p.facets,
-        p.style,
-        p.width,
-        selectedRef.current,
-        collapsedRef.current,
-      );
-      hitRectsRef.current = r.hitRects;
-      chartRef.current?.setOption(r.option, { replaceMerge: ['series'] });
-    };
+    if (!innerRef.current) return;
     if (!chartRef.current) {
-      chartRef.current = init(divRef.current);
+      chartRef.current = init(innerRef.current);
       chartRef.current.on('legendselectchanged', (params: any) => {
         selectedRef.current = { ...params.selected };
-        apply();
+        render();
       });
       chartRef.current.on('click', (params: any) => {
-        if (params.seriesName === '__toggle') {
-          collapsedRef.current = !collapsedRef.current;
-          apply();
+        const sn: string = params.seriesName ?? '';
+        if (sn.startsWith('__toggle:')) {
+          const key = sn.slice('__toggle:'.length);
+          collapsedRef.current = {
+            ...collapsedRef.current,
+            [key]: !collapsedRef.current[key],
+          };
+          render();
         }
       });
       // Drill to Detail: правый клик по конкретному бару -> контекстное
@@ -891,6 +1210,14 @@ export default function SplitFunnelChart(props: SplitFunnelChartProps) {
             formattedVal: hit.meta.branch,
           });
         }
+        if (hit.meta.subbranch && p.columns.subbranch) {
+          filters.push({
+            col: p.columns.subbranch,
+            op: '==',
+            val: hit.meta.subbranch,
+            formattedVal: hit.meta.subbranch,
+          });
+        }
         if (hit.meta.facet != null && p.columns.facet) {
           filters.push({
             col: p.columns.facet,
@@ -904,8 +1231,8 @@ export default function SplitFunnelChart(props: SplitFunnelChartProps) {
         });
       });
     }
-    apply();
-  }, [facets, style, width]);
+    render();
+  }, [facets, style, width, height]);
 
   useEffect(
     () => () => {
@@ -916,17 +1243,12 @@ export default function SplitFunnelChart(props: SplitFunnelChartProps) {
   );
 
   useLayoutEffect(() => {
-    chartRef.current?.resize({ width, height });
-    const r = buildOption(
-      facets,
-      style,
-      width,
-      selectedRef.current,
-      collapsedRef.current,
-    );
-    hitRectsRef.current = r.hitRects;
-    chartRef.current?.setOption(r.option, { replaceMerge: ['series'] });
+    render();
   }, [width, height, facets, style]);
 
-  return <Styles ref={divRef} height={height} width={width} />;
+  return (
+    <Styles ref={divRef} height={height} width={width}>
+      <div ref={innerRef} style={{ width, height }} />
+    </Styles>
+  );
 }

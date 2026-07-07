@@ -4,8 +4,10 @@
   "private": true,
   "description": "Кастомные чарты Apache Superset для GigaID + тулинг для локальной разработки",
   "scripts": {
+    "up": "bash scripts/start-local.sh",
     "setup": "bash scripts/setup-superset-dev.sh",
     "rebuild": "bash scripts/rebuild-plugin.sh",
+    "rebuild:host": "bash scripts/rebuild-plugin-host.sh",
     "seed:funnel": "bash scripts/seed-funnel-data.sh",
     "seed:demo": "bash scripts/seed-demo-data.sh"
   },

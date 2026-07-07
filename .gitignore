@@ -15,6 +15,9 @@ superset-meta-backup-*.sql
 # --- Очередь хост-агента (локальный мост, не версионируем) ---
 .host-queue/
 
+# --- Внутренние заметки из Confluence (домен-знание GigaID, НЕ светим на GitHub) ---
+docs/internal/
+
 # --- Python кэши ---
 __pycache__/
 *.pyc

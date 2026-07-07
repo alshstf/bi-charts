@@ -69,6 +69,11 @@ export default function transformProps(chartProps: ChartProps) {
     ? getMetricLabel(rawFormData.metric)
     : '';
 
+  const subKey = rawFormData?.subbranch_col
+    ? getColumnLabel(rawFormData.subbranch_col)
+    : null;
+
+  const emptyData = (): SplitFunnelData => ({ trunk: [], branches: {} });
   const facetMap = new Map<string | null, SplitFunnelData>();
 
   rows.forEach(row => {
@@ -78,27 +83,40 @@ export default function transformProps(chartProps: ChartProps) {
       value: Number(row[metricKey] ?? 0),
     };
     const facetVal = facetKey ? String(row[facetKey] ?? '—') : null;
-    if (!facetMap.has(facetVal)) {
-      facetMap.set(facetVal, { trunk: [], branches: {} });
-    }
+    if (!facetMap.has(facetVal)) facetMap.set(facetVal, emptyData());
     const fd = facetMap.get(facetVal)!;
     const branchVal = branchKey ? row[branchKey] : null;
     if (isTrunk(branchVal)) {
       fd.trunk.push(step);
+      return;
+    }
+    const b = String(branchVal);
+    const bd = (fd.branches[b] = fd.branches[b] ?? emptyData());
+    const subVal = subKey ? row[subKey] : null;
+    if (subKey && !isTrunk(subVal)) {
+      const s = String(subVal);
+      const sd = (bd.branches[s] = bd.branches[s] ?? emptyData());
+      sd.trunk.push(step);
     } else {
-      const b = String(branchVal);
-      (fd.branches[b] = fd.branches[b] ?? []).push(step);
+      bd.trunk.push(step);
     }
   });
 
   const sortSteps = (steps: FunnelStep[]) =>
-    steps.sort((a, b) =>
-      orderKey ? a.order - b.order : b.value - a.value,
-    );
-  facetMap.forEach(fd => {
-    sortSteps(fd.trunk);
-    Object.values(fd.branches).forEach(sortSteps);
-  });
+    steps.sort((a, b) => (orderKey ? a.order - b.order : b.value - a.value));
+  const sortContainer = (d: SplitFunnelData) => {
+    sortSteps(d.trunk);
+    Object.values(d.branches).forEach(sortContainer);
+  };
+  facetMap.forEach(sortContainer);
+
+  // «Скрыть входной шаг»: отбрасываем первый шаг общего ствола (напр. «Вошли по GigaID»),
+  // воронка начинается со следующего; проценты пересчитаются от нового первого шага.
+  if (rawFormData?.hide_entry_step) {
+    facetMap.forEach(fd => {
+      if (fd.trunk.length) fd.trunk.shift();
+    });
+  }
 
   // фасеты сортируем по объёму входа в воронку
   const facets: SplitFunnelFacet[] = Array.from(facetMap.entries())
@@ -110,11 +128,13 @@ export default function transformProps(chartProps: ChartProps) {
 
   // ветки для палитры собираем по всем фасетам
   const branches: Record<string, true> = {};
-  facets.forEach(f =>
-    Object.keys(f.data.branches).forEach(b => {
+  const collectBranchNames = (d: SplitFunnelData) => {
+    Object.keys(d.branches).forEach(b => {
       branches[b] = true;
-    }),
-  );
+      collectBranchNames(d.branches[b]);
+    });
+  };
+  facets.forEach(f => collectBranchNames(f.data));
 
   const colorScale = CategoricalColorNamespace.getScale(
     colorScheme as string,
@@ -195,7 +215,7 @@ export default function transformProps(chartProps: ChartProps) {
     height,
     facets,
     style,
-    columns: { step: stepKey, branch: branchKey, facet: facetKey },
+    columns: { step: stepKey, branch: branchKey, subbranch: subKey, facet: facetKey },
     onContextMenu,
   };
 }

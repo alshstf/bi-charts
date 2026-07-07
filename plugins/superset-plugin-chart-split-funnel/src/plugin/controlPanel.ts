@@ -53,6 +53,22 @@ const config: ControlPanelConfig = {
         ],
         [
           {
+            name: 'subbranch_col',
+            config: {
+              ...sharedControls.groupby,
+              multi: false,
+              label: t('Sub-branch'),
+              description: t(
+                'Optional 2nd-level branch nested inside each branch (branch-in-branch). ' +
+                  'E.g. within a given branch: which sub-method or channel was used. ' +
+                  'Rows with empty value are the branch trunk before the sub-split; ' +
+                  'sub-branches re-merge at the branch final step.',
+              ),
+            },
+          },
+        ],
+        [
+          {
             name: 'small_multiples_col',
             config: {
               ...sharedControls.groupby,
@@ -75,6 +91,22 @@ const config: ControlPanelConfig = {
       expanded: true,
       controlSetRows: [
         ['color_scheme'],
+        [
+          {
+            name: 'hide_entry_step',
+            config: {
+              type: 'CheckboxControl',
+              label: t('Hide entry (first trunk) step'),
+              renderTrigger: true,
+              default: false,
+              description: t(
+                'Drop the very first common (trunk) step — e.g. the "entered" bar — ' +
+                  'so the funnel starts from the next step. Percentages rebase to the new first step. ' +
+                  'A per-chart toggle equivalent to filtering out the lowest step_order.',
+              ),
+            },
+          },
+        ],
         [
           {
             name: 'trunk_style',

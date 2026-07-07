@@ -4,11 +4,16 @@ export interface FunnelStep {
   value: number;
 }
 
+/**
+ * Рекурсивная модель воронки: контейнер = общий ствол + ветки, где каждая ветка —
+ * снова воронка (свой ствол + свои под-ветки). Лист = { trunk: [...], branches: {} }.
+ * Ветка без под-веток рисуется как раньше (одноуровневая воронка).
+ */
 export interface SplitFunnelData {
-  /** общие шаги до точки ветвления, отсортированы */
+  /** общие шаги контейнера до точки ветвления, отсортированы по order */
   trunk: FunnelStep[];
-  /** ветки: имя -> шаги (отсортированы), первая запись = вход в ветку */
-  branches: Record<string, FunnelStep[]>;
+  /** ветки: имя -> вложенная под-воронка */
+  branches: Record<string, SplitFunnelData>;
 }
 
 export type ValueDisplay = 'both' | 'absolute' | 'percent';
@@ -59,6 +64,8 @@ export interface SplitFunnelFacet {
 export interface SplitFunnelColumns {
   step: string;
   branch: string | null;
+  /** колонка под-ветки (2-й уровень ветвления), null если не задана */
+  subbranch: string | null;
   facet: string | null;
 }
 

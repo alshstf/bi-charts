@@ -16,7 +16,7 @@ export default class SplitFunnelChartPlugin extends ChartPlugin {
         name: t('Split Funnel'),
         description: t(
           'Funnel with a branching point: common trunk steps, then parallel ' +
-            'per-branch mini-funnels (e.g. SMS / email / SberID confirmation). ' +
+            'per-branch mini-funnels (e.g. one branch per channel or method). ' +
             'Legend toggles branches with re-layout; works with chart and dashboard filters.',
         ),
         thumbnail,
