@@ -122,12 +122,50 @@ function containerFinal(d: SplitFunnelData): { name: string | null; value: numbe
   return { name: common, value: finals.reduce((a, f) => a + f.value, 0) };
 }
 
-/** имя финального шага, общего для всех веток контейнера (для слияния), либо null */
+/** все финалы листьев контейнера (рекурсивно): имя последнего шага + значение */
+function leafFinals(d: SplitFunnelData): { name: string | null; value: number }[] {
+  const names = Object.keys(d.branches);
+  if (names.length === 0) {
+    const last = d.trunk[d.trunk.length - 1];
+    return [{ name: last?.name ?? null, value: last?.value ?? 0 }];
+  }
+  return names.flatMap(b => leafFinals(d.branches[b]));
+}
+
+/** значение контейнера НА заданном финальном шаге (0, если лист до него не дошёл).
+ *  Позволяет мержить, даже когда часть под-веток обрывается раньше общего финала. */
+function finalValueAt(d: SplitFunnelData, name: string): number {
+  const names = Object.keys(d.branches);
+  if (names.length === 0) {
+    const last = d.trunk[d.trunk.length - 1];
+    return last && last.name === name ? last.value : 0;
+  }
+  return names.reduce((a, b) => a + finalValueAt(d.branches[b], name), 0);
+}
+
+/** имя финального шага для слияния — ДОМИНИРУЮЩЕЕ среди листьев (мода).
+ *  Терпимо к тому, что отдельная под-ветка обрывается раньше общего финала: такая
+ *  ветка даст 0 в merge (через finalValueAt), а НЕ обнулит весь merge, как раньше.
+ *  null, если развилки нет либо явного (встречающегося ≥2 раз) финала нет. */
 function detectCommonFinal(data: SplitFunnelData): string | null {
   const names = Object.keys(data.branches);
   if (names.length < 2) return null;
-  const lasts = names.map(b => containerFinal(data.branches[b]).name);
-  return lasts.every(n => n !== null && n === lasts[0]) ? lasts[0] : null;
+  const counts = new Map<string, number>();
+  leafFinals(data).forEach(f => {
+    if (f.name) counts.set(f.name, (counts.get(f.name) ?? 0) + 1);
+  });
+  let best: string | null = null;
+  let bestN = 0;
+  counts.forEach((n, name) => {
+    if (n > bestN) {
+      bestN = n;
+      best = name;
+    }
+  });
+  if (best === null) return null;
+  // нужен минимальный консенсус: финал встречается ≥2 раз либо он единственный
+  if (bestN < 2 && counts.size > 1) return null;
+  return best;
 }
 
 /** худший провал конверсии: шаг-к-шагу по стволу и внутри веток.
@@ -363,7 +401,11 @@ function computeLayout(
     const subHeaderH = Math.max(headerH - 6, 15);
     const subBarH = Math.max(branchBarH - 3, 14);
     const subEntry = containerEntry(container) || 1;
-    const finals = subCols.map(s => containerFinal(container.branches[s]).value);
+    const finals = subCols.map(s =>
+      subMerge
+        ? finalValueAt(container.branches[s], subMerge)
+        : containerFinal(container.branches[s]).value,
+    );
     const collapsedHere = !!collapsedSubs[parentBranch];
     if (style.collapsible && subMerge) {
       togglesOut.push({
@@ -596,7 +638,7 @@ function computeLayout(
 
   // --- слияние общего финального шага в сегментированный итоговый бар ---
   if (mergeName && shown.length) {
-    const finals = shown.map(b => containerFinal(data.branches[b]).value);
+    const finals = shown.map(b => finalValueAt(data.branches[b], mergeName));
     /** подпись сегмента: уважает value display и базисы; имя ветки — только
      *  в свёрнутом виде (в развёрнутом её называет заголовок колонки) */
     const segLabel = (b: string, v: number): string => {
@@ -900,7 +942,7 @@ function buildFacetSeries(
     if (mergeName && trunkFirst > 0) {
       const total = Object.keys(data.branches)
         .filter(b => visibleF.includes(b))
-        .reduce((acc, b) => acc + containerFinal(data.branches[b]).value, 0);
+        .reduce((acc, b) => acc + finalValueAt(data.branches[b], mergeName), 0);
       // в спарклайне заголовок несёт и абсолют, и E2E (отдельного итог-бара нет)
       title += sparkline
         ? ` · ${numFmt(total)} · ${pctFmt(total / trunkFirst)} E2E`
@@ -1063,7 +1105,18 @@ function buildOption(
   const allBranches = Object.keys(branchTotals).sort(
     (a, b) => branchTotals[b] - branchTotals[a],
   );
-  const visible = allBranches.filter(b => !selected || selected[b] !== false);
+  // В легенду выносим ТОЛЬКО ветки верхнего уровня (методы). Под-ветки нельзя:
+  // у них нет одноимённой серии (серии зовутся `__sub_*`), поэтому ECharts метит
+  // такие legend-элементы как unselected и отдаёт их в params.selected=false —
+  // после первого клика по легенде под-ветки пропадали. Под-ветки всегда видимы;
+  // их видимостью управляет видимость родительской ветки (renderSubSplit не зовётся
+  // для скрытого метода).
+  const topLevel = new Set<string>();
+  facets.forEach(f => Object.keys(f.data.branches).forEach(b => topLevel.add(b)));
+  const legendNames = allBranches.filter(b => topLevel.has(b));
+  const visible = allBranches.filter(b =>
+    topLevel.has(b) ? !selected || selected[b] !== false : true,
+  );
 
   const facetMode = facets.length > 1 || facets[0]?.name !== null;
   const cols = facetMode
@@ -1108,7 +1161,7 @@ function buildOption(
         icon: 'circle',
         itemWidth: 10,
         itemHeight: 10,
-        data: allBranches,
+        data: legendNames,
         textStyle: { color: style.mutedText, fontSize: 12 },
         ...(selected ? { selected } : {}),
       },
