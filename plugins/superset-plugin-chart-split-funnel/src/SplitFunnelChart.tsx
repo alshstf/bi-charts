@@ -290,7 +290,15 @@ function computeLayout(
   branches: Record<string, Geom>;
   subGeoms: Record<
     string,
-    { geom: Geom; title: string; steps: FunnelStep[]; color: string }
+    {
+      geom: Geom;
+      title: string;
+      steps: FunnelStep[];
+      color: string;
+      entryV: number;
+      prevFirst: number;
+      e2eRef: number;
+    }
   >;
   toggles: { key: string; x: number; y: number; collapsed: boolean }[];
 } {
@@ -371,7 +379,15 @@ function computeLayout(
   // геомы под-веток — отдельными сериями (у каждой под-ветки свой тултип)
   const subGeomsOut: Record<
     string,
-    { geom: Geom; title: string; steps: FunnelStep[]; color: string }
+    {
+      geom: Geom;
+      title: string;
+      steps: FunnelStep[];
+      color: string;
+      entryV: number;
+      prevFirst: number;
+      e2eRef: number;
+    }
   > = {};
   // пиктограммы сворачивания: верхняя развилка (key='__top') + под-развилки (key=имя ветки)
   const togglesOut: { key: string; x: number; y: number; collapsed: boolean }[] =
@@ -401,6 +417,12 @@ function computeLayout(
     const subHeaderH = Math.max(headerH - 6, 15);
     const subBarH = Math.max(branchBarH - 3, 14);
     const subEntry = containerEntry(container) || 1;
+    // точка разветвления = последний шаг ствола ветки (напр. «Аккаунт создан»).
+    // От неё считаются доли/конверсии под-веток (а не от первого шага ветки).
+    const parentSplitV =
+      (container.trunk.length
+        ? container.trunk[container.trunk.length - 1].value
+        : subEntry) || 1;
     const finals = subCols.map(s =>
       subMerge
         ? finalValueAt(container.branches[s], subMerge)
@@ -416,6 +438,8 @@ function computeLayout(
       });
     }
     const bottoms: number[] = [];
+    // геом каждой под-ветки — чтобы сегмент под-merge попал в ЕЁ серию (свой тултип)
+    const subSg: Record<string, Geom> = {};
     if (!collapsedHere) subCols.forEach((s, j) => {
       const sd = container.branches[s];
       const sAll = sd.trunk;
@@ -425,11 +449,15 @@ function computeLayout(
       const color = style.branchColors[s] ?? parentColor;
       // под-ветку рисуем в СВОЙ геом (отдельная серия -> собственный тултип)
       const sg: Geom = { rects: [], connectors: [] };
+      subSg[s] = sg;
       subGeomsOut[`${parentBranch} ${s}`] = {
         geom: sg,
         title: `${parentBranch} / ${s}`,
         steps: sd.trunk,
         color,
+        entryV: sEntryV,
+        prevFirst: parentSplitV,
+        e2eRef: trunkRef || sEntryV,
       };
       sg.rects.push({
         x: sx,
@@ -437,7 +465,7 @@ function computeLayout(
         w: subW,
         h: subHeaderH,
         fill: color,
-        label: `${s} · ${pctFmt(subEntry > 0 ? sEntryV / subEntry : NaN)}`,
+        label: `${s} · ${pctFmt(parentSplitV > 0 ? sEntryV / parentSplitV : NaN)}`,
         labelColor: style.barText,
         bold: true,
         meta: { branch: parentBranch, subbranch: s },
@@ -453,7 +481,7 @@ function computeLayout(
           label: barLabel(
             st,
             {
-              previous: k === 0 ? sEntryV : sSteps[k - 1].value,
+              previous: k === 0 ? parentSplitV : sSteps[k - 1].value,
               container: sEntryV,
               e2e: trunkRef || sEntryV,
             },
@@ -510,6 +538,20 @@ function computeLayout(
         leak.subbranch === s &&
         (collapsedHere ||
           leak.toIndex === container.branches[s].trunk.length - 1);
+      // #3 доля от точки разветвления; #2 узкие сегменты без подписи (уходят в тултип)
+      // подпись = barLabel сегмента от ВХОДА под-ветки (как у ветки → консистентно;
+      // «без подтверждения» = 100%). Узкие сегменты без подписи (детали в тултипе).
+      const sEntryS = containerEntry(container.branches[s]) || 1;
+      const subAllS = container.branches[s].trunk;
+      const subPrevS =
+        subAllS.length >= 2 ? subAllS[subAllS.length - 2].value : sEntryS;
+      const segFull = barLabel(
+        { name: '', order: 0, value: v },
+        { previous: subPrevS, container: sEntryS, e2e: trunkRef || sEntryS },
+        style.valueDisplay,
+        style.percentBasis,
+      ).replace(/^ · /, '');
+      const segLabelExp = w >= 88 ? segFull : w >= 48 ? numFmt(v) : '';
       const seg = {
         x: cx,
         y: mt,
@@ -520,7 +562,7 @@ function computeLayout(
         // развёрнуто: только значение (имя есть на заголовке под-колонки выше)
         label: collapsedHere
           ? `${s} · ${numFmt(v)} · ${pctFmt(total > 0 ? v / total : NaN)}`
-          : numFmt(v),
+          : segLabelExp,
         labelColor: style.barText,
         labelWidth: Math.max(w - 8, 18),
         meta: { branch: parentBranch, subbranch: s, step: subMerge },
@@ -535,9 +577,13 @@ function computeLayout(
           title: `${parentBranch} / ${s}`,
           steps: container.branches[s].trunk,
           color,
+          entryV: containerEntry(container.branches[s]) || 1,
+          prevFirst: parentSplitV,
+          e2eRef: trunkRef || parentSplitV,
         };
       } else {
-        g.rects.push(seg);
+        // сегмент под-merge кладём в серию под-ветки (её тултип), не в серию ветки
+        (subSg[s] ?? g).rects.push(seg);
       }
       g.connectors.push(
         collapsedHere
@@ -877,17 +923,67 @@ function branchTooltipSteps(d: SplitFunnelData): FunnelStep[] {
   return out;
 }
 
-function branchTooltip(steps: FunnelStep[], name: string): string {
-  const entry = steps[0]?.value || 0;
+function branchTooltip(
+  steps: FunnelStep[],
+  name: string,
+  opts?: {
+    percentBasis: (keyof PctBases)[];
+    entryV: number;
+    prevFirst: number;
+    e2eRef: number;
+  },
+): string {
+  // container = вход в этот уровень (self entry); prevFirst = шаг разветвления
+  // родителя. Поэтому у первого шага «previous» = осмысленная конверсия входа,
+  // а не тривиальные 100%.
+  const container = opts?.entryV ?? steps[0]?.value ?? 0;
+  const prevFirst = opts?.prevFirst ?? container;
+  const e2eRef = opts?.e2eRef ?? container;
+  const order: (keyof PctBases)[] = ['previous', 'container', 'e2e'];
+  const sfx: Record<string, string> = {
+    previous: ' step',
+    container: ' of entry',
+    e2e: ' E2E',
+  };
   const rows = steps
-    .map(
-      s =>
+    .map((s, i) => {
+      const prev = i === 0 ? prevFirst : steps[i - 1].value;
+      const bases: PctBases = { previous: prev, container, e2e: e2eRef };
+      let pctTxt: string;
+      if (opts && opts.percentBasis.length) {
+        const parts: { b: keyof PctBases; base: number }[] = [];
+        order
+          .filter(b => opts.percentBasis.includes(b))
+          .forEach(b => {
+            const base = bases[b];
+            if (!parts.some(p => p.base === base)) parts.push({ b, base });
+          });
+        pctTxt = parts
+          .map(
+            p =>
+              pctFmt(p.base > 0 ? s.value / p.base : NaN) +
+              (parts.length > 1 ? sfx[p.b] : ''),
+          )
+          .join(' · ');
+      } else {
+        pctTxt = pctFmt(container ? s.value / container : NaN);
+      }
+      return (
         `<div style="display:flex;gap:14px;line-height:1.7"><span>${s.name}</span>` +
         `<span style="margin-left:auto;font-weight:600">${numFmt(s.value)}` +
-        ` (${pctFmt(entry ? s.value / entry : NaN)})</span></div>`,
-    )
+        ` (${pctTxt})</span></div>`
+      );
+    })
     .join('');
-  return `<div style="font-weight:600;margin-bottom:4px">${name}</div>${rows}`;
+  // подзаголовок «вход» — доля входа контейнера от родителя (напр. под-ветка от
+  // «Аккаунт создан»). Виден всегда, даже если заголовок колонки обрезан.
+  const firstV = steps[0]?.value ?? 0;
+  const entryNote =
+    prevFirst > 0 && firstV > 0 && Math.abs(prevFirst - firstV) > 0.5
+      ? `<div style="opacity:.7;margin-bottom:4px">вход · ${numFmt(firstV)} · ` +
+        `${pctFmt(firstV / prevFirst)}</div>`
+      : '';
+  return `<div style="font-weight:600;margin-bottom:4px">${name}</div>${entryNote}${rows}`;
 }
 
 function buildFacetSeries(
@@ -961,6 +1057,10 @@ function buildFacetSeries(
     branches: shiftedBranches,
   };
   const fz = facetMode ? 11 : 12;
+  const e2eStart = data.trunk[0]?.value ?? 0; // начало воронки (E2E-знаменатель)
+  // точка разветвления ствола (последний шаг ствола) — «previous» для 1-го шага ветки
+  const trunkSplitV = data.trunk[data.trunk.length - 1]?.value ?? e2eStart;
+  const pb = style.percentBasis;
   const hitRects: HitRect[] = [];
   const collectHits = (g: Geom) =>
     g.rects.forEach(r => {
@@ -987,6 +1087,12 @@ function buildFacetSeries(
           branchTooltip(
             data.trunk,
             facet.name ? `Общий поток — ${facet.name}` : 'Общий поток',
+            {
+              percentBasis: pb,
+              entryV: e2eStart,
+              prevFirst: e2eStart,
+              e2eRef: e2eStart,
+            },
           ),
       },
     },
@@ -1001,11 +1107,25 @@ function buildFacetSeries(
           ? { type: 'group', children: geomToChildren(layout.branches[b], fz) }
           : { type: 'group', children: [] },
       tooltip: {
-        formatter: () =>
-          branchTooltip(
-            data.branches[b].trunk,
-            facet.name ? `${b} — ${facet.name}` : b,
-          ),
+        formatter: () => {
+          const bd = data.branches[b];
+          const hasSub = Object.keys(bd.branches).length > 0;
+          // у ветки с под-ветвлением ствол обрывается на «Аккаунт создан» —
+          // дописываем слитый финал ветки (то, что на сегментном баре выхода)
+          const steps =
+            hasSub && mergeName
+              ? [
+                  ...bd.trunk,
+                  { name: mergeName, order: 99, value: finalValueAt(bd, mergeName) },
+                ]
+              : bd.trunk;
+          return branchTooltip(steps, facet.name ? `${b} — ${facet.name}` : b, {
+            percentBasis: pb,
+            entryV: bd.trunk[0]?.value ?? e2eStart,
+            prevFirst: trunkSplitV,
+            e2eRef: e2eStart,
+          });
+        },
       },
     })),
   ];
@@ -1025,6 +1145,12 @@ function buildFacetSeries(
           branchTooltip(
             info.steps,
             facet.name ? `${info.title} — ${facet.name}` : info.title,
+            {
+              percentBasis: pb,
+              entryV: info.entryV,
+              prevFirst: info.prevFirst,
+              e2eRef: info.e2eRef,
+            },
           ),
       },
     });
