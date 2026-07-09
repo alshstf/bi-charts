@@ -70,16 +70,21 @@ export default function transformProps(chartProps: ChartProps) {
 
   let rows = ((queriesData?.[0]?.data ?? []) as DataRecord[]).slice();
 
-  // чарт показывает ОДНУ сессию. Если выборка содержит несколько (фильтр по
-  // session_id не задан), берём одну: приоритет у явного контрола session_id,
-  // иначе первую встретившуюся — чтобы не смешивать события разных сессий.
+  // чарт показывает ОДНУ сессию. Приоритет:
+  //  1) если запрос УЖЕ сужен до одной сессии (кросс-фильтр из «Ленты сбоев» или
+  //     нативный фильтр дашборда) — берём её, даже если задан контрол session_id;
+  //  2) иначе — явный контрол session_id (дефолт в explore);
+  //  3) иначе — первая встретившаяся сессия.
   if (kSession && rows.length) {
     const ctrlSid =
       (formData as Record<string, any>).sessionId ?? raw.session_id ?? null;
+    const distinct = new Set(rows.map(r => String(r[kSession])));
     const targetSid =
-      ctrlSid != null && String(ctrlSid) !== ''
-        ? String(ctrlSid)
-        : String(rows[0][kSession]);
+      distinct.size === 1
+        ? String(rows[0][kSession])
+        : ctrlSid != null && String(ctrlSid) !== ''
+          ? String(ctrlSid)
+          : String(rows[0][kSession]);
     rows = rows.filter(r => String(r[kSession]) === targetSid);
   }
 
