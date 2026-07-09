@@ -84,8 +84,11 @@ export default function transformProps(chartProps: ChartProps) {
   }
 
   // --- первичный проход: сырьё -> события ---
-  type Pre = Omit<SessionEvent, 'idx' | 'gapMs' | 'isBack' | 'isRetry'>;
-  const pre: Pre[] = rows.map(r => {
+  type Pre = Omit<
+    SessionEvent,
+    'idx' | 'gapMs' | 'isBack' | 'isRetry' | 'stateFetch'
+  >;
+  const preAll: Pre[] = rows.map(r => {
     const errorCode = kErrCode ? (r[kErrCode] as string) || undefined : undefined;
     const errorMsg = kErrMsg ? (r[kErrMsg] as string) || undefined : undefined;
     const statusRaw = kStatus ? String(r[kStatus] ?? '') : '';
@@ -106,10 +109,39 @@ export default function transformProps(chartProps: ChartProps) {
   });
 
   // сортировка по времени (стабильная); без времени — порядок запроса
-  pre.forEach((e, i) => ((e as any)._i = i));
-  pre.sort((a, b) =>
+  preAll.forEach((e, i) => ((e as any)._i = i));
+  preAll.sort((a, b) =>
     a.time && b.time ? a.time - b.time : (a as any)._i - (b as any)._i,
   );
+
+  // --- служебные (технические) шаги: не рисуем как узлы ---
+  // напр. get_state = SPA загрузил экран и дёрнул состояние. Как отдельные шаги
+  // они дают ложные возвраты/прыжки между дорожками. Схлопываем: считаем их
+  // «загрузками состояния» и вешаем маркер ⟳ на следующий РЕАЛЬНЫЙ шаг.
+  // formData у Superset в camelCase (serviceSteps), rawFormData — snake_case
+  const serviceRaw =
+    (formData as any).serviceSteps ?? raw.service_steps ?? '';
+  const serviceTokens = String(serviceRaw)
+    .split(/\r?\n|,/)
+    .map(s => s.trim().toLowerCase())
+    .filter(Boolean);
+  const isService = (step: string) => {
+    const s = step.trim().toLowerCase();
+    return serviceTokens.some(tok => s === tok || s.includes(tok));
+  };
+  type PreS = Pre & { stateFetch: number };
+  const pre: PreS[] = [];
+  let pendingSvc = 0;
+  preAll.forEach(e => {
+    if (serviceTokens.length && e.step && isService(e.step)) {
+      pendingSvc += 1;
+      return;
+    }
+    pre.push({ ...e, stateFetch: pendingSvc });
+    pendingSvc = 0;
+  });
+  // хвостовые служебные события — на последний реальный шаг
+  if (pendingSvc && pre.length) pre[pre.length - 1].stateFetch += pendingSvc;
 
   // --- канонический порядок шагов ---
   const provided = String(canonicalStepsRaw)

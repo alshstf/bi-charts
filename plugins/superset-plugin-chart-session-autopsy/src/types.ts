@@ -18,6 +18,7 @@ export interface SessionEvent {
   gapMs: number; // пауза от предыдущего события
   isBack: boolean; // возврат к более раннему шагу
   isRetry: boolean; // повтор уже виденного шага
+  stateFetch: number; // сколько служебных «загрузок состояния» перед этим шагом (get_state)
   raw: Record<string, unknown>;
 }
 

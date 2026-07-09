@@ -113,6 +113,20 @@ const config: ControlPanelConfig = {
             },
           },
         ],
+        [
+          {
+            name: 'service_steps',
+            config: {
+              type: 'TextAreaControl',
+              label: t('Service / technical steps'),
+              default: '',
+              offerEditInModal: false,
+              description: t(
+                'Optional: substrings of step names (one per line) that are technical, not real user steps — e.g. «get_state» (SPA loaded a screen and fetched user state). They are NOT drawn as nodes (no false back-navigation / lane jumps); instead a small ⟳ marker on the next real step shows a state fetch happened.',
+              ),
+            },
+          },
+        ],
       ],
     },
   ],

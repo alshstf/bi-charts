@@ -72,6 +72,7 @@ function tip(e: SessionEvent): string {
   if (e.screen) bits.push(e.screen);
   if (Number.isFinite(e.latencyMs)) bits.push(`${Math.round(e.latencyMs as number)} мс`);
   if (e.gapMs > 3000) bits.push(`пауза ${fmtDur(e.gapMs)}`);
+  if (e.stateFetch) bits.push(`⟳ стейт ×${e.stateFetch}`);
   if (e.isBack) bits.push('← назад');
   if (e.isRetry) bits.push('↻ повтор');
   if (e.errorCode || e.errorMsg) bits.push(`${e.errorCode || 'ошибка'}${e.errorMsg ? `: ${e.errorMsg}` : ''}`);
@@ -225,6 +226,7 @@ function Swimlane({ props, orientation, onPick }: { props: SessionAutopsyChartPr
               {e.isRetry ? <circle cx={x} cy={y} r={r + 3} fill="none" stroke={statusFill(e, c)} strokeWidth={1} strokeDasharray="2 2" /> : null}
               <circle cx={x} cy={y} r={r} fill={statusFill(e, c)} stroke={c.bg} strokeWidth={3} />
               <text x={x} y={y} fontSize={10} fill="#fff" textAnchor="middle" dominantBaseline="central">{e.idx}</text>
+              {e.stateFetch ? <text x={x + r} y={y - r} fontSize={11} fill={c.textMuted} textAnchor="start">⟳</text> : null}
               <SvgLines lines={wrapText(prefixOf(e) + e.step, lineChars, 3)} x={x} y={y + r + 14} fill={e.status === 'error' ? c.error : c.textMuted} fontSize={11} anchor="middle" />
             </g>
           );
@@ -269,6 +271,7 @@ function Swimlane({ props, orientation, onPick }: { props: SessionAutopsyChartPr
             {e.isRetry ? <circle cx={x} cy={y} r={r + 3} fill="none" stroke={statusFill(e, c)} strokeWidth={1} strokeDasharray="2 2" /> : null}
             <circle cx={x} cy={y} r={r} fill={statusFill(e, c)} stroke={c.bg} strokeWidth={3} />
             <text x={x} y={y} fontSize={10} fill="#fff" textAnchor="middle" dominantBaseline="central">{e.idx}</text>
+            {e.stateFetch ? <text x={x + r} y={y - r} fontSize={11} fill={c.textMuted} textAnchor="start">⟳</text> : null}
             <SvgLines lines={wrapText(prefixOf(e) + e.step, vChars, 2)} x={x + r + 6} y={y} fill={e.status === 'error' ? c.error : c.textPrimary} fontSize={11} anchor="start" />
           </g>
         );
@@ -298,12 +301,13 @@ function Graph({ props, onPick }: { props: SessionAutopsyChartProps; onPick: (e:
   const nodeW = Math.min(colW - 10, 124);
   const nodeH = 42;
 
-  const states = new Map<string, { branch: string; step: string; visits: number; error: boolean }>();
+  const states = new Map<string, { branch: string; step: string; visits: number; error: boolean; stateFetch: number }>();
   events.forEach(e => {
     const k = `${e.branch}|${e.step}`;
-    const st = states.get(k) || { branch: e.branch, step: e.step, visits: 0, error: false };
+    const st = states.get(k) || { branch: e.branch, step: e.step, visits: 0, error: false, stateFetch: 0 };
     st.visits += 1;
     if (e.status === 'error') st.error = true;
+    st.stateFetch += e.stateFetch;
     states.set(k, st);
   });
   const edges = new Map<string, { from: string; to: string; count: number; back: boolean }>();
@@ -361,6 +365,7 @@ function Graph({ props, onPick }: { props: SessionAutopsyChartProps; onPick: (e:
                 <text x={x + nodeW / 2 - 2} y={y - nodeH / 2 + 1} fontSize={10} fill="#fff" textAnchor="middle" dominantBaseline="central">{st.visits}</text>
               </g>
             ) : null}
+            {st.stateFetch ? <text x={x - nodeW / 2 + 2} y={y - nodeH / 2 - 2} fontSize={11} fill={c.textMuted} textAnchor="start">⟳</text> : null}
           </g>
         );
       })}
