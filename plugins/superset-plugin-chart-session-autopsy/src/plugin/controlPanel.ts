@@ -47,6 +47,20 @@ const config: ControlPanelConfig = {
         ],
         [
           {
+            name: 'extra_cols',
+            config: {
+              ...sharedControls.groupby,
+              multi: true,
+              label: t('Extra raw columns'),
+              description: t(
+                'Optional. Extra columns to fetch and show in the per-event raw panel (click a step). A JSON column (e.g. «details» = the Details map) is auto-expanded into key.subkey rows for troubleshooting.',
+              ),
+              validators: [],
+            },
+          },
+        ],
+        [
+          {
             name: 'session_id',
             config: {
               type: 'TextControl',
@@ -109,6 +123,34 @@ const config: ControlPanelConfig = {
               offerEditInModal: false,
               description: t(
                 'Optional: ordered step names (one per line) for «furthest reached» and precise back-navigation detection. If empty, derived heuristically from the session.',
+              ),
+            },
+          },
+        ],
+        [
+          {
+            name: 'benign_errors',
+            config: {
+              type: 'TextAreaControl',
+              label: t('Benign errors (not real failures)'),
+              default: '',
+              offerEditInModal: false,
+              description: t(
+                'Optional: error codes that are expected control-flow signals, not failures (one per line). Such events are shown as a normal (green) step — excluded from the outcome, root cause and error callout. Use «code» to match anywhere, or «step_substring:code» to match only on a given step. E.g. «auth_send_otp_registration:credentials_conflict» (login form used for implicit signup — this error just means the user already exists).',
+              ),
+            },
+          },
+        ],
+        [
+          {
+            name: 'ignore_steps',
+            config: {
+              type: 'TextAreaControl',
+              label: t('Ignored / noise steps (dropped)'),
+              default: '',
+              offerEditInModal: false,
+              description: t(
+                'Optional: substrings of step names (one per line) to drop entirely — pure noise that isn\'t part of the user flow, e.g. «session_refreshed» (background keep-alive that can spam 100s of repeats). Unlike service steps, these leave NO marker.',
               ),
             },
           },

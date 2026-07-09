@@ -10,6 +10,11 @@ export default function buildQuery(formData: QueryFormData) {
   const f = formData as Record<string, any>;
   // DnD-контролы Superset хранят значение массивом (["col"]) — берём первый
   const one = (v: any) => (Array.isArray(v) ? v[0] : v);
+  const extra = Array.isArray(f.extra_cols)
+    ? f.extra_cols
+    : f.extra_cols
+      ? [f.extra_cols]
+      : [];
   const cols = [
     one(f.session_id_col),
     one(f.event_time_col),
@@ -23,6 +28,7 @@ export default function buildQuery(formData: QueryFormData) {
     one(f.user_col),
     one(f.partner_col),
     one(f.device_col),
+    ...extra.map(one),
   ].filter(Boolean);
 
   const sidCol = one(f.session_id_col);

@@ -21,6 +21,18 @@ function fmtTime(ms: number): string {
   return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
 }
 
+// человекочитаемый datetime для raw-панели (в сырье event_time — epoch ms)
+function fmtFull(ms: number): string {
+  if (!ms) return '';
+  const d = new Date(ms);
+  const p = (n: number) => String(n).padStart(2, '0');
+  return (
+    `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ` +
+    `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}.` +
+    `${String(d.getMilliseconds()).padStart(3, '0')}`
+  );
+}
+
 function toMs(v: unknown): number {
   if (v === null || v === undefined) return 0;
   if (typeof v === 'number') return v < 1e12 ? v * 1000 : v; // sec -> ms эвристика
@@ -92,28 +104,84 @@ export default function transformProps(chartProps: ChartProps) {
     }
   }
 
+  // --- шумовые шаги: выкидываем целиком (напр. session_refreshed keepalive может
+  // заспамить сотнями повторов). В отличие от service_steps — без ⟳-маркера. ---
+  const ignoreTokens = String((formData as any).ignoreSteps ?? raw.ignore_steps ?? '')
+    .split(/\r?\n|,/)
+    .map(s => s.trim().toLowerCase())
+    .filter(Boolean);
+  if (ignoreTokens.length && rows.length) {
+    rows = rows.filter(r => {
+      const s = String(r[kStep] ?? '')
+        .trim()
+        .toLowerCase();
+      return !ignoreTokens.some(tok => s === tok || s.includes(tok));
+    });
+  }
+
+  // --- «доброкачественные» ошибки: коды, которые на деле нормальный сигнал
+  // управления потоком, а не сбой (напр. auth_send_otp_registration +
+  // credentials_conflict = форма входа использована для неявной регистрации,
+  // юзер уже есть). Такое событие рисуем зелёным и НЕ считаем ошибкой. ---
+  const benignRules = String(
+    (formData as any).benignErrors ?? raw.benign_errors ?? '',
+  )
+    .split(/\r?\n|,/)
+    .map(s => s.trim().toLowerCase())
+    .filter(Boolean)
+    .map(line => {
+      const i = line.indexOf(':');
+      return i >= 0
+        ? { sub: line.slice(0, i).trim(), code: line.slice(i + 1).trim() }
+        : { sub: '', code: line };
+    });
+  const isBenignErr = (code: string, step: string) => {
+    const cc = code.trim().toLowerCase();
+    const ss = step.trim().toLowerCase();
+    // step может иметь суффикс « · канал» (auth_send_otp · sms) — матчим действие
+    // ТОЧНО (== или начинается с «sub »), чтобы «auth_send_otp» не цеплял
+    // «auth_send_otp_registration»
+    return (
+      !!cc &&
+      benignRules.some(
+        r => r.code === cc && (!r.sub || ss === r.sub || ss.startsWith(`${r.sub} `)),
+      )
+    );
+  };
+
   // --- первичный проход: сырьё -> события ---
   type Pre = Omit<
     SessionEvent,
     'idx' | 'gapMs' | 'isBack' | 'isRetry' | 'stateFetch'
   >;
   const preAll: Pre[] = rows.map(r => {
-    const errorCode = kErrCode ? (r[kErrCode] as string) || undefined : undefined;
-    const errorMsg = kErrMsg ? (r[kErrMsg] as string) || undefined : undefined;
+    const step = String(r[kStep] ?? '');
+    const rawCode = kErrCode ? String(r[kErrCode] ?? '') : '';
+    const benign = isBenignErr(rawCode, step);
+    const errorCode = benign ? undefined : rawCode || undefined;
+    const errorMsg = benign
+      ? undefined
+      : kErrMsg
+        ? (r[kErrMsg] as string) || undefined
+        : undefined;
     const statusRaw = kStatus ? String(r[kStatus] ?? '') : '';
     const time = kTime ? toMs(r[kTime]) : 0;
     const branchVal = kBranch ? r[kBranch] : null;
     return {
       time,
       timeLabel: fmtTime(time),
-      step: String(r[kStep] ?? ''),
+      step,
       branch: isTrunk(branchVal) ? 'trunk' : String(branchVal),
-      status: normStatus(statusRaw, !!errorCode),
+      status: benign ? 'ok' : normStatus(statusRaw, !!errorCode),
       errorCode,
       errorMsg,
       latencyMs: kLatency ? Number(r[kLatency] ?? NaN) : undefined,
       screen: kScreen ? (r[kScreen] as string) || undefined : undefined,
-      raw: r as Record<string, unknown>,
+      // в raw-панели показываем время человекочитаемо (в сырье — epoch ms)
+      raw:
+        kTime && time
+          ? { ...(r as Record<string, unknown>), [kTime]: fmtFull(time) }
+          : (r as Record<string, unknown>),
     };
   });
 

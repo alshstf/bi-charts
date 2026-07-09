@@ -1,4 +1,4 @@
-import { CSSProperties, Fragment, useEffect, useState } from 'react';
+import { CSSProperties, useEffect, useState } from 'react';
 import {
   AutopsyColors,
   AutopsyOrientation,
@@ -163,8 +163,44 @@ function Toggle({ view, setView, orientation, setOrientation, c }: {
 }
 
 /* --------------------------- raw event panel ------------------------------ */
+const KV = ({ k, v, c }: { k: string; v: unknown; c: AutopsyColors }) => (
+  <>
+    <div style={{ color: c.textMuted, fontFamily: 'monospace' }}>{k}</div>
+    <div style={{ color: c.textPrimary, wordBreak: 'break-word' }}>
+      {v === null || v === undefined || v === '' ? '—' : String(v)}
+    </div>
+  </>
+);
+
 function RawPanel({ e, c, onClose }: { e: SessionEvent; c: AutopsyColors; onClose: () => void }) {
-  const rows = Object.entries(e.raw);
+  // JSON-поля (напр. details = мапа Details) — сворачиваемый блок (их бывает много)
+  const [open, setOpen] = useState<Record<string, boolean>>({});
+  const plain: [string, unknown][] = [];
+  const jsonFields: { key: string; entries: [string, unknown][] }[] = [];
+  Object.entries(e.raw).forEach(([k, v]) => {
+    if (typeof v === 'string' && v.trim().startsWith('{')) {
+      try {
+        const obj = JSON.parse(v);
+        if (obj && typeof obj === 'object' && !Array.isArray(obj)) {
+          jsonFields.push({
+            key: k,
+            entries: Object.entries(obj).sort((a, b) => a[0].localeCompare(b[0])),
+          });
+          return;
+        }
+      } catch {
+        /* не JSON — покажем как есть */
+      }
+    }
+    plain.push([k, v]);
+  });
+  const grid: CSSProperties = {
+    display: 'grid',
+    gridTemplateColumns: 'minmax(110px,170px) 1fr',
+    gap: '3px 12px',
+    padding: '10px 12px',
+    fontSize: 12,
+  };
   return (
     <div style={{ marginTop: 10, border: `0.5px solid ${c.border}`, borderRadius: 10, background: c.bg }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 12px', borderBottom: `0.5px solid ${c.border}` }}>
@@ -173,14 +209,29 @@ function RawPanel({ e, c, onClose }: { e: SessionEvent; c: AutopsyColors; onClos
         </div>
         <button type="button" onClick={onClose} aria-label="Закрыть" style={{ border: 'none', background: 'transparent', color: c.textMuted, cursor: 'pointer', fontSize: 16, lineHeight: 1 }}>×</button>
       </div>
-      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(110px,170px) 1fr', gap: '3px 12px', padding: '10px 12px', fontSize: 12 }}>
-        {rows.map(([k, v]) => (
-          <Fragment key={k}>
-            <div style={{ color: c.textMuted, fontFamily: 'monospace' }}>{k}</div>
-            <div style={{ color: c.textPrimary, wordBreak: 'break-word' }}>{v === null || v === undefined || v === '' ? '—' : String(v)}</div>
-          </Fragment>
+      <div style={grid}>
+        {plain.map(([k, v]) => (
+          <KV key={k} k={k} v={v} c={c} />
         ))}
       </div>
+      {jsonFields.map(jf => (
+        <div key={jf.key} style={{ borderTop: `0.5px solid ${c.border}` }}>
+          <button
+            type="button"
+            onClick={() => setOpen(o => ({ ...o, [jf.key]: !o[jf.key] }))}
+            style={{ width: '100%', textAlign: 'left', border: 'none', background: 'transparent', cursor: 'pointer', padding: '8px 12px', fontSize: 12, color: c.textMuted, fontFamily: 'monospace' }}
+          >
+            {open[jf.key] ? '▾' : '▸'} {jf.key} · {jf.entries.length} полей
+          </button>
+          {open[jf.key] ? (
+            <div style={{ ...grid, paddingTop: 0 }}>
+              {jf.entries.map(([sk, sv]) => (
+                <KV key={sk} k={sk} v={sv} c={c} />
+              ))}
+            </div>
+          ) : null}
+        </div>
+      ))}
     </div>
   );
 }
