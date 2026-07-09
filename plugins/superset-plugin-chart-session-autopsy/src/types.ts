@@ -73,6 +73,8 @@ export interface SessionAutopsyChartProps {
   diagnostics: SessionDiagnostics;
   meta: SessionMeta;
   canonicalSteps: string[];
+  /** true = запрос вернул несколько сессий и ни одна не выбрана → показать промпт */
+  needsSession?: boolean;
   style: SessionAutopsyStyle;
   /** имена колонок датасета — для drill-to-detail фильтров */
   columns: { session: string | null; step: string | null; branch: string | null };

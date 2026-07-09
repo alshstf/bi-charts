@@ -375,13 +375,26 @@ function Graph({ props, onPick }: { props: SessionAutopsyChartProps; onPick: (e:
 
 /* ------------------------------- main FC ---------------------------------- */
 export default function SessionAutopsyChart(props: SessionAutopsyChartProps) {
-  const { width, height, events, style } = props;
+  const { width, height, events, style, needsSession } = props;
   const c = style.colors;
   const [view, setView] = useState<AutopsyView>(style.view);
   const [orientation, setOrientation] = useState<AutopsyOrientation>(style.orientation);
   const [selected, setSelected] = useState<SessionEvent | null>(null);
   useEffect(() => setView(style.view), [style.view]);
   useEffect(() => setOrientation(style.orientation), [style.orientation]);
+
+  if (needsSession) {
+    return (
+      <div style={{ width, height, overflow: 'auto', color: c.textPrimary, display: 'flex', alignItems: 'center', justifyContent: 'center', textAlign: 'center', padding: 16, boxSizing: 'border-box' }}>
+        <div>
+          <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 6 }}>Выберите сессию</div>
+          <div style={{ fontSize: 13, color: c.textMuted }}>
+            Кликните по ячейке <b>session_id</b> в «Ленте сбоев» (или задайте фильтр «Сессия» / Session ID) — разбор появится здесь.
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div style={{ width, height, overflow: 'auto', color: c.textPrimary, fontFamily: 'inherit', boxSizing: 'border-box', padding: 2 }}>
